@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "product-inspection-system"
+version = "0.1.0"
+description = "UT product point-cloud inspection system"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn>=0.30",
+  "pydantic>=2.7",
+  "python-multipart>=0.0.9",
+  "celery>=5.4",
+  "redis>=5.0",
+  "numpy>=1.24",
+  "pillow>=10.0",
+  "requests>=2.32",
+  "reportlab>=4.2",
+]
+
+[project.optional-dependencies]
+client = [
+  "PySide6>=6.7",
+  "pyvista>=0.44",
+  "pyvistaqt>=0.11",
+]
+dev = [
+  "pytest>=8.2",
+]
+
+[project.scripts]
+pis-server = "server.app:run"
+pis-client = "client.app:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["client*", "server*", "shared*", "workers*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
