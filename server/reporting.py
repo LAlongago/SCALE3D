@@ -10,6 +10,13 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, Tabl
 
 from shared.schemas import InspectionSummary, JobResultPayload, ProductModelDefinition
 
+from datetime import datetime, date
+
+def json_serializer(obj):
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    raise TypeError(f"Type {type(obj)} not serializable")
+
 
 def render_report_bundle(
     output_dir: Path,
@@ -27,7 +34,7 @@ def render_report_bundle(
         "lengths": [item.model_dump() for item in result.lengths],
         "reports": result.reports.model_dump(),
     }
-    json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False, default=json_serializer), encoding="utf-8")
 
     doc = SimpleDocTemplate(str(pdf_path), pagesize=A4)
     styles = getSampleStyleSheet()
