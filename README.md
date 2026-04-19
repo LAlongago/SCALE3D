@@ -1,4 +1,4 @@
-# Product Inspection System
+# SCALE3D
 
 UT 产品点云检测系统 V1 首版工程骨架。
 
@@ -13,20 +13,20 @@ UT 产品点云检测系统 V1 首版工程骨架。
 ## Quick Start
 
 ```powershell
-cd product-inspection-system
+cd SCALE3D
 python -m uvicorn server.app:app --host 0.0.0.0 --port 8000
 ```
 
 客户端：
 
 ```powershell
-cd product-inspection-system
+cd SCALE3D
 python -m client.app
 ```
 
 ## Environment Variables
 
-- `PIS_RUNTIME_ROOT`: 运行期目录，默认 `product-inspection-system/.runtime`
+- `PIS_RUNTIME_ROOT`: 运行期目录，默认 `SCALE3D/.runtime`
 - `PIS_SERVER_URL`: 客户端 API 地址，默认 `http://127.0.0.1:8000`
 - `PIS_API_TOKEN`: 可选 API Token
 - `PIS_MAX_UPLOAD_MB`: 上传大小限制，默认 `512`

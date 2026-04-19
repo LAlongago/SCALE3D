@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "product-inspection-system"
+name = "SCALE3D"
 version = "0.1.0"
-description = "UT product point-cloud inspection system"
+description = "An implementation of Skeleton-based Cloud Analysis and Length Estimation in 3D"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
