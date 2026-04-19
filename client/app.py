@@ -10,9 +10,12 @@ def main() -> None:  # pragma: no cover - client entrypoint is not unit-tested
         raise SystemExit("PySide6 is required to run the desktop client.") from exc
 
     from client.main_window import MainWindow
+    from client.task_controller import ClientTaskController
 
     app = QApplication(sys.argv)
     window = MainWindow()
+    controller = ClientTaskController(window)
+    window._controller = controller  # type: ignore[attr-defined]
     window.show()
     sys.exit(app.exec())
 
