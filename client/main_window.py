@@ -17,6 +17,7 @@ try:  # pragma: no cover - UI widgets are not unit-tested
         QGridLayout,
         QGroupBox,
         QHBoxLayout,
+        QHeaderView,
         QLabel,
         QListWidget,
         QMainWindow,
@@ -30,6 +31,7 @@ try:  # pragma: no cover - UI widgets are not unit-tested
         QVBoxLayout,
         QWidget,
     )
+    from PySide6.QtGui import QFont
 except ImportError:  # pragma: no cover
     QMainWindow = object  # type: ignore[assignment]
 
@@ -46,6 +48,7 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
 
         self.setWindowTitle("UT 产品点云检测系统")
         self.resize(1600, 900)
+        self._apply_stylesheet()
         self._build_ui()
         self._load_product_models()
 
@@ -53,25 +56,119 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
         self.poll_timer.setInterval(2000)
         self.poll_timer.timeout.connect(self.refresh_job_status)
 
+    def _apply_stylesheet(self) -> None:
+        # 采用现代深色工业风主题，提高整体对比度与视觉一致性
+        style = """
+        QMainWindow, QWidget {
+            background-color: #1e1e1e;
+            color: #d4d4d4;
+            font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+            font-size: 13px;
+        }
+        QGroupBox {
+            border: 1px solid #3c3c3c;
+            border-radius: 6px;
+            margin-top: 1.5ex;
+            padding: 10px;
+            font-weight: bold;
+        }
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            subcontrol-position: top left;
+            left: 10px;
+            padding: 0 5px;
+            color: #4daafc;
+        }
+        QPushButton {
+            background-color: #333333;
+            border: 1px solid #3c3c3c;
+            border-radius: 4px;
+            padding: 6px 12px;
+            color: #cccccc;
+        }
+        QPushButton:hover {
+            background-color: #404040;
+            border: 1px solid #4daafc;
+        }
+        QPushButton:pressed {
+            background-color: #2d2d2d;
+        }
+        QPushButton[class="primary"] {
+            background-color: #0066cc;
+            color: #ffffff;
+            border: 1px solid #005bb5;
+        }
+        QPushButton[class="primary"]:hover {
+            background-color: #0073e6;
+        }
+        QComboBox, QListWidget, QTextEdit, QTableWidget {
+            background-color: #252526;
+            border: 1px solid #3c3c3c;
+            border-radius: 4px;
+            padding: 4px;
+            color: #d4d4d4;
+        }
+        QComboBox:hover, QListWidget:hover, QTextEdit:hover, QTableWidget:hover {
+            border: 1px solid #4daafc;
+        }
+        QHeaderView::section {
+            background-color: #2d2d2d;
+            padding: 4px;
+            border: none;
+            border-right: 1px solid #3c3c3c;
+            border-bottom: 1px solid #3c3c3c;
+            font-weight: bold;
+        }
+        QTableWidget::item:selected {
+            background-color: #094771;
+            color: #ffffff;
+        }
+        QProgressBar {
+            border: 1px solid #3c3c3c;
+            border-radius: 4px;
+            text-align: center;
+            background-color: #252526;
+        }
+        QProgressBar::chunk {
+            background-color: #0066cc;
+            width: 10px;
+        }
+        QSplitter::handle {
+            background-color: #3c3c3c;
+            width: 2px;
+        }
+        """
+        self.setStyleSheet(style)
+
     def _build_ui(self) -> None:
         central = QWidget(self)
         self.setCentralWidget(central)
         root_layout = QHBoxLayout(central)
+        root_layout.setContentsMargins(10, 10, 10, 10)
         splitter = QSplitter(Qt.Horizontal, central)
         root_layout.addWidget(splitter)
 
+        # 左侧控制面板
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(0, 0, 5, 0)
+        
         controls = QGroupBox("任务控制")
         controls_layout = QGridLayout(controls)
+        controls_layout.setSpacing(10)
+        
         self.product_model_combo = QComboBox()
         self.input_type_combo = QComboBox()
         self.input_type_combo.addItem("图像组", InputType.IMAGE_SET.value)
         self.input_type_combo.addItem("点云文件", InputType.POINT_CLOUD.value)
+        
         self.select_button = QPushButton("选择文件")
         self.submit_button = QPushButton("提交任务")
+        self.submit_button.setProperty("class", "primary") # 区分主操作按钮
+        
         self.select_button.clicked.connect(self.select_files)
         self.submit_button.clicked.connect(self.submit_job)
+        
         controls_layout.addWidget(QLabel("产品型号"), 0, 0)
         controls_layout.addWidget(self.product_model_combo, 0, 1)
         controls_layout.addWidget(QLabel("输入类型"), 1, 0)
@@ -81,22 +178,37 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
         left_layout.addWidget(controls)
 
         self.selected_files_list = QListWidget()
-        left_layout.addWidget(QLabel("已选文件"))
+        list_label = QLabel("已选文件")
+        list_label.setContentsMargins(0, 10, 0, 5)
+        left_layout.addWidget(list_label)
         left_layout.addWidget(self.selected_files_list, 1)
 
+        # 中间视图面板
         center_panel = QWidget()
         center_layout = QVBoxLayout(center_panel)
-        center_layout.addWidget(QLabel("点云展示区域"))
+        center_layout.setContentsMargins(5, 0, 5, 0)
+        
+        view_label = QLabel("三维点云检测视图")
+        font = QFont()
+        font.setBold(True)
+        font.setPointSize(11)
+        view_label.setFont(font)
+        center_layout.addWidget(view_label)
+        
         self.point_cloud_view = PointCloudView(on_part_selected=self._show_selected_part_info)
         center_layout.addWidget(self.point_cloud_view, 1)
 
+        # 右侧状态与结果面板
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(5, 0, 0, 0)
+        
         status_box = QGroupBox("任务状态")
         status_layout = QVBoxLayout(status_box)
         self.job_label = QLabel("尚未提交任务")
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
+        self.progress_bar.setFixedHeight(18)
         self.status_text = QTextEdit()
         self.status_text.setReadOnly(True)
         status_layout.addWidget(self.job_label)
@@ -106,30 +218,41 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
 
         self.parts_table = QTableWidget(0, 4)
         self.parts_table.setHorizontalHeaderLabels(["部件", "点数", "置信度", "长度"])
+        # 表格交互优化：整行选中、不可编辑、列宽自适应
+        self.parts_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.parts_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.parts_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.parts_table.verticalHeader().setVisible(False)
         self.parts_table.itemSelectionChanged.connect(self._handle_table_selection)
-        right_layout.addWidget(QLabel("结果输出栏"))
+        
+        table_label = QLabel("结果特征数据")
+        table_label.setContentsMargins(0, 10, 0, 5)
+        right_layout.addWidget(table_label)
         right_layout.addWidget(self.parts_table, 1)
 
-        export_box = QGroupBox("导出")
-        export_layout = QVBoxLayout(export_box)
+        export_box = QGroupBox("数据导出")
+        export_layout = QGridLayout(export_box)
+        export_layout.setSpacing(10)
         self.export_pdf_button = QPushButton("导出 PDF 报告")
         self.export_json_button = QPushButton("导出 JSON 结果")
         self.export_ply_button = QPushButton("导出分割点云")
-        self.refresh_button = QPushButton("手动刷新")
+        self.refresh_button = QPushButton("手动刷新状态")
+        
         self.export_pdf_button.clicked.connect(lambda: self.export_artifact("inspection_report.pdf"))
         self.export_json_button.clicked.connect(lambda: self.export_artifact("inspection_report.json"))
         self.export_ply_button.clicked.connect(lambda: self.export_artifact("segmentation_pred.ply"))
         self.refresh_button.clicked.connect(self.refresh_job_status)
-        export_layout.addWidget(self.refresh_button)
-        export_layout.addWidget(self.export_pdf_button)
-        export_layout.addWidget(self.export_json_button)
-        export_layout.addWidget(self.export_ply_button)
+        
+        export_layout.addWidget(self.refresh_button, 0, 0, 1, 2)
+        export_layout.addWidget(self.export_pdf_button, 1, 0)
+        export_layout.addWidget(self.export_json_button, 1, 1)
+        export_layout.addWidget(self.export_ply_button, 2, 0, 1, 2)
         right_layout.addWidget(export_box)
 
         splitter.addWidget(left_panel)
         splitter.addWidget(center_panel)
         splitter.addWidget(right_panel)
-        splitter.setSizes([300, 900, 400])
+        splitter.setSizes([350, 850, 400])
 
     def _load_product_models(self) -> None:
         try:
