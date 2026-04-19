@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -26,6 +27,8 @@ from workers.geometry_adapter import parse_curve_length_summary, run_skeleton_an
 from workers.pointcept_adapter import run_pointcept_inference
 from workers.pointcloud_io import load_pointcloud_payload, prepare_pointcept_dataset
 from workers.reconstruction_adapter import run_image_reconstruction
+
+logger = logging.getLogger("scale3d.worker")
 
 
 class LocalQueueDispatcher:
@@ -130,9 +133,12 @@ def run_job_pipeline(job_id: str) -> None:
     uploads_dir = repo.uploads_dir(job_id)
 
     try:
+        logger.info("Job %s accepted into pipeline.", job_id)
         repo.update_stage(job_id, JobStatus.QUEUED, JobStage.UPLOAD, 5, "Job queued for execution.")
+        logger.info("Job %s queued.", job_id)
 
         if record.input_type == InputType.IMAGE_SET:
+            logger.info("Job %s entering image reconstruction.", job_id)
             repo.update_stage(
                 job_id,
                 JobStatus.RUNNING,
@@ -156,6 +162,7 @@ def run_job_pipeline(job_id: str) -> None:
                 ArtifactKind.POINT_CLOUD,
             )
         else:
+            logger.info("Job %s using uploaded point cloud directly.", job_id)
             original_pointcloud = next(iter(sorted(uploads_dir.glob("*.ply"))))
             copied_pointcloud = _copy_into_artifacts(
                 repo,
@@ -173,6 +180,7 @@ def run_job_pipeline(job_id: str) -> None:
             "Validating uploaded point cloud and extracting metadata.",
             queue_name="geometry_cpu",
         )
+        logger.info("Job %s validating point cloud.", job_id)
         pointcloud_validation = local_dispatcher.run_stage(
             "geometry_cpu",
             _run_pointcloud_validation_stage,
@@ -193,6 +201,7 @@ def run_job_pipeline(job_id: str) -> None:
             "Preparing Pointcept inference sample and running segmentation.",
             queue_name="segmentation_gpu",
         )
+        logger.info("Job %s running Pointcept segmentation.", job_id)
         dataset_root = workspace_dir / "pointcept_dataset"
         sample_name = job_id
         sample_dir = prepare_pointcept_dataset(sample_name, copied_pointcloud, dataset_root)
@@ -236,6 +245,7 @@ def run_job_pipeline(job_id: str) -> None:
             "Aggregating part completeness and confidence report.",
             queue_name="geometry_cpu",
         )
+        logger.info("Job %s building segmentation report.", job_id)
         raw_segmentation_rows = json.loads(
             segmentation_output["summary_json"].read_text(encoding="utf-8")
         )
@@ -264,6 +274,7 @@ def run_job_pipeline(job_id: str) -> None:
             "Running pc-skeletor skeletonization and curve length analysis.",
             queue_name="geometry_cpu",
         )
+        logger.info("Job %s running skeletonization and curve length analysis.", job_id)
         geometry_outputs = local_dispatcher.run_stage(
             "geometry_cpu",
             run_skeleton_and_length,
@@ -305,6 +316,7 @@ def run_job_pipeline(job_id: str) -> None:
             "Rendering inspection report bundle.",
             queue_name="geometry_cpu",
         )
+        logger.info("Job %s generating inspection report.", job_id)
         warnings = list(segmentation_summary.notes)
         inspection_summary = build_inspection_summary(product_model, warnings)
         result = JobResultPayload(
@@ -347,8 +359,10 @@ def run_job_pipeline(job_id: str) -> None:
         result.reports.json_path = "artifacts/inspection_report.json"
         repo.set_result(job_id, result)
         repo.mark_succeeded(job_id)
+        logger.info("Job %s completed successfully.", job_id)
     except Exception as exc:
         repo.mark_failed(job_id, repo.get(job_id).current_stage, str(exc))
+        logger.exception("Job %s failed: %s", job_id, exc)
         raise
 
 

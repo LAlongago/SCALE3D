@@ -4,16 +4,20 @@ from pathlib import Path
 from typing import Callable
 
 try:
-    from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QPixmap
+    from PySide6.QtWidgets import QLabel, QSizePolicy, QStackedLayout, QVBoxLayout, QWidget
 except ImportError:  # pragma: no cover - client deps are optional in tests
     QLabel = object  # type: ignore[assignment]
     QVBoxLayout = object  # type: ignore[assignment]
     QWidget = object  # type: ignore[assignment]
 
 try:  # pragma: no cover - client deps are optional in tests
+    import numpy as np
     import pyvista as pv
     from pyvistaqt import QtInteractor
 except ImportError:  # pragma: no cover
+    np = None
     pv = None
     QtInteractor = None
 
@@ -24,36 +28,77 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
         self.on_part_selected = on_part_selected
         self.mesh = None
         self.highlight_actor = None
+        self._image_pixmap = None
         self.length_map: dict[int, float | None] = {}
         self.part_names: dict[int, str] = {}
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        if QtInteractor is None or pv is None:
-            self.placeholder = QLabel("尚未安装 PyVista 或 PySide6，点云预览不可用。")
-            self.placeholder.setStyleSheet("color: #888888; alignment: center;")
-            layout.addWidget(self.placeholder)
-            self.plotter = None
-            return
 
-        self.plotter = QtInteractor(self)
-        layout.addWidget(self.plotter.interactor)
-        self.plotter.set_background("#1e1e1e")
-        self.plotter.add_text("暂无点云数据", font_size=11, color="#888888")
-        self.plotter.enable_point_picking(
-            callback=self._handle_picked_point,
-            show_message=False,
-            use_mesh=True,
-            left_clicking=True,
-        )
+        self.stack = QStackedLayout()
+        layout.addLayout(self.stack)
+
+        self.placeholder = QLabel("暂无文件预览")
+        self.placeholder.setAlignment(Qt.AlignCenter)
+        self.placeholder.setStyleSheet("color: #888888;")
+        self.stack.addWidget(self.placeholder)
+
+        self.image_label = QLabel("暂无图片预览")
+        self.image_label.setAlignment(Qt.AlignCenter)
+        self.image_label.setStyleSheet("color: #888888; background-color: #111111;")
+        self.image_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.stack.addWidget(self.image_label)
+
+        if QtInteractor is None or pv is None:
+            self.plotter = None
+            self.pointcloud_placeholder = QLabel("尚未安装 PyVista 或 PySide6，点云预览不可用。")
+            self.pointcloud_placeholder.setAlignment(Qt.AlignCenter)
+            self.pointcloud_placeholder.setStyleSheet("color: #888888;")
+            self.stack.addWidget(self.pointcloud_placeholder)
+        else:
+            self.plotter = QtInteractor(self)
+            self.plotter.set_background("#1e1e1e")
+            self._reset_plotter_scene()
+            self.plotter.enable_point_picking(
+                callback=self._handle_picked_point,
+                show_message=False,
+                use_picker=True,
+                left_clicking=True,
+            )
+            self.stack.addWidget(self.plotter.interactor)
+
+        self.stack.setCurrentWidget(self.placeholder)
 
     def clear_view(self) -> None:
-        if self.plotter is None:
-            return
-        self.plotter.clear()
-        self.plotter.add_text("暂无点云数据", font_size=11, color="#888888")
         self.mesh = None
         self.highlight_actor = None
+        self._image_pixmap = None
+        if self.plotter is not None:
+            self._reset_plotter_scene()
+        self.image_label.clear()
+        self.image_label.setText("暂无图片预览")
+        self.stack.setCurrentWidget(self.placeholder)
+
+    def preview_file(self, path: Path) -> None:
+        suffix = path.suffix.lower()
+        if suffix == ".ply":
+            self.load_segmentation_ply(path)
+            return
+        self.show_image(path)
+
+    def show_image(self, path: Path) -> None:
+        pixmap = QPixmap(str(path))
+        if pixmap.isNull():
+            self._image_pixmap = None
+            self.image_label.setText(f"无法预览图片:\n{path.name}")
+        else:
+            self._image_pixmap = pixmap
+            self._refresh_image_pixmap()
+        self.stack.setCurrentWidget(self.image_label)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._refresh_image_pixmap()
 
     def set_lookup(self, part_names: dict[int, str], length_map: dict[int, float | None]) -> None:
         self.part_names = dict(part_names)
@@ -61,20 +106,16 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
 
     def load_segmentation_ply(self, path: Path) -> None:
         if self.plotter is None or pv is None:
+            self.stack.setCurrentWidget(self.pointcloud_placeholder)
             return
         self.plotter.clear()
+        self.plotter.show_grid(color="#4a4a4a")
+        self.plotter.add_axes(line_width=2, labels_off=True)
         self.mesh = pv.read(str(path))
-        scalars = "pred_label" if "pred_label" in self.mesh.point_data else None
-        self.plotter.add_mesh(
-            self.mesh,
-            scalars=scalars,
-            rgb=scalars is None,
-            render_points_as_spheres=True,
-            point_size=4,
-            ambient=0.2,
-            name="main_cloud",
-        )
+        render_kwargs = self._build_point_cloud_render_kwargs()
+        self.plotter.add_mesh(self.mesh, **render_kwargs)
         self.plotter.reset_camera()
+        self.stack.setCurrentWidget(self.plotter.interactor)
 
     def highlight_part(self, part_id: int) -> None:
         if self.plotter is None or self.mesh is None:
@@ -98,8 +139,10 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
             )
         self.plotter.render()
 
-    def _handle_picked_point(self, point) -> None:
+    def _handle_picked_point(self, point, *_args) -> None:
         if self.mesh is None or pv is None:
+            return
+        if point is None:
             return
         point_id = int(self.mesh.find_closest_point(point))
         label_array = self.mesh.point_data.get("pred_label")
@@ -115,3 +158,96 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
                 self.on_part_selected(part_id, part_name)
             else:
                 self.on_part_selected(part_id, f"{part_name} | 长度={length:.4f}")
+
+    def _refresh_image_pixmap(self) -> None:
+        if self._image_pixmap is None or self._image_pixmap.isNull():
+            return
+        self.image_label.setPixmap(
+            self._image_pixmap.scaled(
+                self.image_label.size(),
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation,
+            )
+        )
+
+    def _build_point_cloud_render_kwargs(self) -> dict:
+        kwargs = {
+            "render_points_as_spheres": True,
+            "point_size": 4,
+            "ambient": 0.2,
+            "name": "main_cloud",
+        }
+        if self.mesh is None:
+            return kwargs
+
+        point_data = self.mesh.point_data
+        if "pred_label" in point_data:
+            kwargs["scalars"] = "pred_label"
+            return kwargs
+
+        rgb_array_name = self._find_rgb_array_name()
+        if rgb_array_name is not None:
+            kwargs["scalars"] = rgb_array_name
+            kwargs["rgb"] = True
+            return kwargs
+
+        if self._has_rgb_components():
+            kwargs["scalars"] = self._build_rgb_components()
+            kwargs["rgb"] = True
+            return kwargs
+
+        kwargs["color"] = "#3b82f6"
+        return kwargs
+
+    def _find_rgb_array_name(self) -> str | None:
+        if self.mesh is None:
+            return None
+
+        point_data = self.mesh.point_data
+        preferred_names = (
+            "rgb",
+            "rgba",
+            "colors",
+            "colour",
+            "diffuse_colors",
+        )
+        for name in preferred_names:
+            if name in point_data and self._is_rgb_array(point_data[name]):
+                return name
+
+        for name in point_data.keys():
+            if self._is_rgb_array(point_data[name]):
+                return name
+        return None
+
+    def _has_rgb_components(self) -> bool:
+        if self.mesh is None:
+            return False
+        point_data = self.mesh.point_data
+        component_names = {"red", "green", "blue"}
+        return component_names.issubset({name.lower() for name in point_data.keys()})
+
+    def _build_rgb_components(self):
+        if self.mesh is None or np is None:
+            return None
+        point_data = self.mesh.point_data
+        channel_map = {name.lower(): point_data[name] for name in point_data.keys()}
+        red = channel_map["red"]
+        green = channel_map["green"]
+        blue = channel_map["blue"]
+        return np.column_stack((red, green, blue))
+
+    @staticmethod
+    def _is_rgb_array(array) -> bool:
+        shape = getattr(array, "shape", None)
+        if shape is None or len(shape) != 2:
+            return False
+        return shape[1] in {3, 4}
+
+    def _reset_plotter_scene(self) -> None:
+        if self.plotter is None:
+            return
+        self.plotter.clear()
+        self.plotter.show_grid(color="#4a4a4a")
+        self.plotter.add_axes(line_width=2, labels_off=True)
+        self.plotter.add_text("暂无点云数据", font_size=11, color="#888888")

@@ -62,6 +62,7 @@ class FileJobRepository:
             status=JobStatus.UPLOADED,
             current_stage=JobStage.UPLOAD,
             current_progress=0,
+            current_message="文件已接收，等待分发。",
             uploads=list(uploads),
             client_meta=client_meta,
             stage_history=[
@@ -114,6 +115,7 @@ class FileJobRepository:
         record.status = status
         record.current_stage = stage
         record.current_progress = progress
+        record.current_message = message
         record.queue_name = queue_name
         record.stage_history.append(
             StageState(
@@ -163,6 +165,7 @@ class FileJobRepository:
         record.current_stage = stage
         record.error = message
         record.current_progress = 100
+        record.current_message = message
         record.stage_history.append(
             StageState(stage=stage, progress=100, message=message, queue_name=record.queue_name)
         )
@@ -173,5 +176,7 @@ class FileJobRepository:
         record = self.get(job_id)
         record.status = JobStatus.SUCCEEDED
         record.current_progress = 100
+        if record.stage_history:
+            record.current_message = record.stage_history[-1].message
         self.save(record)
         return record

@@ -18,6 +18,10 @@ except ImportError:  # pragma: no cover
     QTimer = object  # type: ignore[assignment]
 
 
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+POINTCLOUD_SUFFIXES = {".ply"}
+
+
 class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
     def __init__(self, window: MainWindow) -> None:
         self.window = window
@@ -33,7 +37,8 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         self.poll_timer.setInterval(2000)
         self.poll_timer.timeout.connect(self.refresh_all_job_statuses)
 
-        self.window.select_files_requested.connect(self.handle_select_files)
+        self.window.browse_directory_requested.connect(self.handle_browse_directory)
+        self.window.file_selection_changed.connect(self.handle_file_selection)
         self.window.submit_requested.connect(self.submit_job)
         self.window.refresh_requested.connect(self.refresh_all_job_statuses)
         self.window.task_selected.connect(self.handle_task_selection)
@@ -52,14 +57,30 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
             on_error=lambda message: self.window.show_error("连接失败", message),
         )
 
-    def handle_select_files(self) -> None:
-        selected = self.window.prompt_for_files(self.window.selected_input_type())
-        self.selected_files = selected
-        self.window.show_selected_files(selected)
+    def handle_browse_directory(self) -> None:
+        selected_dir = self.window.prompt_for_directory()
+        if selected_dir is None:
+            return
+        self.window.set_browser_root(selected_dir)
+
+    def handle_file_selection(self, selected_paths: object) -> None:
+        if not isinstance(selected_paths, list):
+            return
+        self.selected_files = [path for path in selected_paths if isinstance(path, Path)]
+        preview_target = self.selected_files[0] if self.selected_files else None
+        try:
+            self.window.preview_file(preview_target)
+        except Exception as exc:
+            self.window.clear_result()
+            self.window.show_error("预览失败", f"无法预览文件 {preview_target.name if preview_target else ''}: {exc}")
+            if preview_target is not None:
+                self.window.append_log(f"预览失败: {preview_target.name} | {exc}")
+        if preview_target is not None:
+            self.window.append_log(f"已选择文件: {preview_target.name}")
 
     def submit_job(self) -> None:
         if not self.selected_files:
-            self.window.show_warning("缺少输入", "请先选择图像组或点云文件。")
+            self.window.show_warning("缺少输入", "请先在文件选择窗口中选择图像或点云文件。")
             return
 
         product_model_id = self.window.selected_product_model_id()
@@ -68,16 +89,53 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
             return
 
         input_type = self.window.selected_input_type()
-        try:
-            if input_type == InputType.IMAGE_SET.value:
-                validate_image_paths(self.selected_files)
-            else:
-                validate_pointcloud_path(self.selected_files[0])
-        except Exception as exc:
-            self.window.show_error("本地校验失败", str(exc))
+        if input_type == InputType.IMAGE_SET.value:
+            image_files = self._validate_image_selection()
+            if image_files is None:
+                return
+            if len(image_files) > 1 and not self.window.confirm_image_batch(len(image_files)):
+                self.window.append_log("用户取消了图像批次提交。")
+                return
+            self._submit_single_job(product_model_id, input_type, image_files)
             return
 
-        file_paths = list(self.selected_files)
+        pointcloud_files = self._validate_pointcloud_selection()
+        if pointcloud_files is None:
+            return
+        for pointcloud_path in pointcloud_files:
+            self._submit_single_job(product_model_id, input_type, [pointcloud_path])
+
+    def _validate_image_selection(self) -> list[Path] | None:
+        invalid = [path for path in self.selected_files if path.suffix.lower() not in IMAGE_SUFFIXES]
+        if invalid:
+            names = "，".join(path.name for path in invalid[:3])
+            self.window.show_error("文件类型错误", f"图像组任务只能选择图片文件，当前包含: {names}")
+            return None
+        try:
+            validate_image_paths(self.selected_files)
+        except Exception as exc:
+            self.window.show_error("本地校验失败", str(exc))
+            return None
+        return list(self.selected_files)
+
+    def _validate_pointcloud_selection(self) -> list[Path] | None:
+        invalid = [path for path in self.selected_files if path.suffix.lower() not in POINTCLOUD_SUFFIXES]
+        if invalid:
+            names = "，".join(path.name for path in invalid[:3])
+            self.window.show_error("文件类型错误", f"点云任务只能选择 PLY 文件，当前包含: {names}")
+            return None
+
+        valid_paths: list[Path] = []
+        for pointcloud_path in self.selected_files:
+            try:
+                validate_pointcloud_path(pointcloud_path)
+            except Exception as exc:
+                self.window.show_error("点云校验失败", f"{pointcloud_path.name}: {exc}")
+                return None
+            valid_paths.append(pointcloud_path)
+        return valid_paths
+
+    def _submit_single_job(self, product_model_id: str, input_type: str, file_paths: list[Path]) -> None:
         file_names = [path.name for path in file_paths]
         display_name = file_names[0] if len(file_names) == 1 else f"{file_names[0]} 等 {len(file_names)} 个文件"
         task_key = uuid4().hex
@@ -89,6 +147,7 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
             status="uploading",
             stage="upload",
             progress=0,
+            current_message="准备上传文件。",
             submitted_files=file_names,
         )
         self.job_states[task_key] = state
@@ -125,6 +184,7 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
             state.status = "uploading"
             state.stage = "upload"
             state.progress = progress.progress_percent
+            state.current_message = progress.status_text
         self.window.upsert_job(state)
 
     def _on_submit_failed(self, task_key: str, message: str) -> None:
@@ -133,6 +193,7 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
             return
         state.status = "failed"
         state.error = message
+        state.current_message = message
         state.transfer.active = False
         state.transfer.status_text = "上传失败"
         self.window.upsert_job(state)
@@ -145,6 +206,7 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         state.status = response["status"]
         state.stage = response["current_stage"]
         state.progress = response["current_progress"]
+        state.current_message = response.get("current_message", state.current_message)
         state.transfer.active = False
         state.transfer.status_text = "上传完成，等待服务器处理"
         state.transfer.progress_percent = 100
@@ -192,6 +254,7 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         state.status = payload["status"]
         state.stage = payload["current_stage"]
         state.progress = payload["current_progress"]
+        state.current_message = payload.get("current_message", state.current_message)
         state.error = payload.get("error")
         if state.status not in {"uploading"} and not state.transfer.active:
             state.transfer.status_text = "等待中" if state.status == "queued" else "服务器处理中"
@@ -199,7 +262,7 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
 
         if self.selected_task_key == task_key:
             self.window.append_log(
-                f"任务 {state.job_id}: 状态={state.status} 阶段={state.stage} 进度={state.progress}%"
+                f"任务 {state.job_id}: 状态={state.status} 阶段={state.stage} 进度={state.progress}% 说明={state.current_message}"
             )
 
         if state.status == "succeeded" and state.result is None and not state.result_loading:
@@ -241,6 +304,7 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
             return
         state.result_loading = False
         state.error = message
+        state.current_message = message
         state.transfer.active = False
         state.transfer.status_text = "结果下载失败"
         self.window.upsert_job(state)
@@ -251,6 +315,7 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         state = self.job_states[task_key]
         state.result_loading = False
         state.result = bundle["result"]
+        state.current_message = "结果已加载完成。"
         state.transfer.active = False
         state.transfer.status_text = "结果下载完成"
         state.transfer.progress_percent = 100
@@ -265,6 +330,8 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         self.window.show_job_details(state)
         if state is None:
             self.window.clear_result()
+            preview_target = self.selected_files[0] if self.selected_files else None
+            self.window.preview_file(preview_target)
             return
         if state.result is not None:
             segmentation_path = self.cache_dir / task_key / "segmentation_pred.ply"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import mimetypes
 import shutil
 from pathlib import Path
@@ -19,6 +20,7 @@ from shared.settings import get_settings
 from shared.validators import validate_image_paths, validate_pointcloud_path
 
 app = FastAPI(title="UT Product Inspection System")
+logger = logging.getLogger("scale3d.server")
 
 
 def _check_token(authorization: str | None) -> None:
@@ -49,6 +51,7 @@ async def create_job(
     authorization: Annotated[str | None, Header()] = None,
 ):
     _check_token(authorization)
+    logger.info("Received create_job request: product_model_id=%s input_type=%s file_count=%s", product_model_id, input_type, len(files))
     try:
         normalized_input_type = InputType(input_type)
     except ValueError as exc:
@@ -71,6 +74,7 @@ async def create_job(
     stored_paths = []
     for file in files:
         destination = uploads_dir / (file.filename or "upload.bin")
+        logger.info("Receiving upload for job=%s file=%s", record.job_id, destination.name)
         with destination.open("wb") as handle:
             shutil.copyfileobj(file.file, handle)
         stored_paths.append(destination)
@@ -87,11 +91,13 @@ async def create_job(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     dispatch_job(record.job_id)
+    logger.info("Job dispatched: job_id=%s queue=%s", record.job_id, record.queue_name)
     return CreateJobResponse(
         job_id=record.job_id,
         status=record.status,
         current_stage=record.current_stage,
         current_progress=record.current_progress,
+        current_message=record.current_message,
     )
 
 
@@ -108,9 +114,11 @@ def get_job(job_id: str, authorization: Annotated[str | None, Header()] = None):
         status=record.status,
         current_stage=record.current_stage,
         current_progress=record.current_progress,
+        current_message=record.current_message,
         queue_name=record.queue_name,
         updated_at=record.updated_at,
         error=record.error,
+        stage_history=record.stage_history,
     )
 
 
@@ -158,4 +166,8 @@ def download_artifact(
 
 
 def run() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    )
     uvicorn.run("server.app:app", host="0.0.0.0", port=8000, reload=False)

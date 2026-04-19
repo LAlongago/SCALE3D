@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from client.file_browser import FileBrowserWidget
 from client.models import JobViewState
 from client.point_cloud_view import PointCloudView
 from shared.enums import InputType
@@ -35,13 +36,14 @@ except ImportError:  # pragma: no cover
 
 
 class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tested
-    select_files_requested = Signal()
+    browse_directory_requested = Signal()
     submit_requested = Signal()
     refresh_requested = Signal()
     task_selected = Signal(object)
     export_requested = Signal(str)
     part_row_selected = Signal(int)
     point_cloud_part_picked = Signal(int, str)
+    file_selection_changed = Signal(object)
 
     def __init__(self) -> None:
         super().__init__()
@@ -95,14 +97,14 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
         QPushButton[class="primary"]:hover {
             background-color: #0073e6;
         }
-        QComboBox, QListWidget, QTextEdit, QTableWidget {
+        QComboBox, QListWidget, QTextEdit, QTableWidget, QTreeView {
             background-color: #252526;
             border: 1px solid #3c3c3c;
             border-radius: 4px;
             padding: 4px;
             color: #d4d4d4;
         }
-        QComboBox:hover, QListWidget:hover, QTextEdit:hover, QTableWidget:hover {
+        QComboBox:hover, QListWidget:hover, QTextEdit:hover, QTableWidget:hover, QTreeView:hover {
             border: 1px solid #4daafc;
         }
         QHeaderView::section {
@@ -113,7 +115,7 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
             border-bottom: 1px solid #3c3c3c;
             font-weight: bold;
         }
-        QTableWidget::item:selected {
+        QTableWidget::item:selected, QTreeView::item:selected {
             background-color: #094771;
             color: #ffffff;
         }
@@ -155,10 +157,10 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
         self.input_type_combo.addItem("图像组", InputType.IMAGE_SET.value)
         self.input_type_combo.addItem("点云文件", InputType.POINT_CLOUD.value)
 
-        self.select_button = QPushButton("选择文件")
+        self.select_button = QPushButton("打开目录")
         self.submit_button = QPushButton("提交任务")
         self.submit_button.setProperty("class", "primary")
-        self.select_button.clicked.connect(self.select_files_requested.emit)
+        self.select_button.clicked.connect(self.browse_directory_requested.emit)
         self.submit_button.clicked.connect(self.submit_requested.emit)
 
         controls_layout.addWidget(QLabel("产品型号"), 0, 0)
@@ -169,11 +171,13 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
         controls_layout.addWidget(self.submit_button, 2, 1)
         left_layout.addWidget(controls)
 
-        selected_label = QLabel("已选文件")
-        selected_label.setContentsMargins(0, 10, 0, 5)
-        left_layout.addWidget(selected_label)
-        self.selected_files_list = QListWidget()
-        left_layout.addWidget(self.selected_files_list, 1)
+        browser_label = QLabel("文件选择")
+        browser_label.setContentsMargins(0, 10, 0, 5)
+        left_layout.addWidget(browser_label)
+        self.file_browser = FileBrowserWidget()
+        self.file_browser.browse_requested.connect(self.browse_directory_requested.emit)
+        self.file_browser.selection_changed.connect(self.file_selection_changed.emit)
+        left_layout.addWidget(self.file_browser, 2)
 
         queue_label = QLabel("任务队列")
         queue_label.setContentsMargins(0, 10, 0, 5)
@@ -186,7 +190,7 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
         center_layout = QVBoxLayout(center_panel)
         center_layout.setContentsMargins(5, 0, 5, 0)
 
-        view_label = QLabel("三维点云展示")
+        view_label = QLabel("文件预览")
         font = QFont()
         font.setBold(True)
         font.setPointSize(11)
@@ -205,13 +209,16 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
         self.job_label = QLabel("尚未选择任务")
         self.server_status_label = QLabel("状态: -")
         self.server_stage_label = QLabel("阶段: -")
+        self.server_message_label = QLabel("说明: -")
+        self.server_message_label.setWordWrap(True)
         self.server_progress_bar = QProgressBar()
         self.server_progress_bar.setRange(0, 100)
         self.server_progress_bar.setFixedHeight(18)
         status_layout.addWidget(self.job_label, 0, 0, 1, 2)
         status_layout.addWidget(self.server_status_label, 1, 0)
         status_layout.addWidget(self.server_stage_label, 1, 1)
-        status_layout.addWidget(self.server_progress_bar, 2, 0, 1, 2)
+        status_layout.addWidget(self.server_message_label, 2, 0, 1, 2)
+        status_layout.addWidget(self.server_progress_bar, 3, 0, 1, 2)
         right_layout.addWidget(status_box)
 
         transfer_box = QGroupBox("传输监控")
@@ -267,7 +274,7 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
         splitter.addWidget(left_panel)
         splitter.addWidget(center_panel)
         splitter.addWidget(right_panel)
-        splitter.setSizes([360, 860, 420])
+        splitter.setSizes([420, 800, 420])
 
     def selected_input_type(self) -> str:
         return self.input_type_combo.currentData()
@@ -275,27 +282,26 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
     def selected_product_model_id(self) -> str | None:
         return self.product_model_combo.currentData()
 
-    def prompt_for_files(self, input_type: str) -> list[Path]:
-        if input_type == InputType.IMAGE_SET.value:
-            files, _ = QFileDialog.getOpenFileNames(
-                self,
-                "选择图像组",
-                "",
-                "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)",
-            )
-        else:
-            file_path, _ = QFileDialog.getOpenFileName(self, "选择点云文件", "", "PLY (*.ply)")
-            files = [file_path] if file_path else []
-        return [Path(item) for item in files if item]
+    def prompt_for_directory(self) -> Path | None:
+        selected = QFileDialog.getExistingDirectory(self, "选择资源目录", "")
+        return Path(selected) if selected else None
 
     def prompt_save_path(self, artifact_name: str) -> Path | None:
         target, _ = QFileDialog.getSaveFileName(self, f"导出 {artifact_name}", artifact_name)
         return Path(target) if target else None
 
-    def show_selected_files(self, file_paths: list[Path]) -> None:
-        self.selected_files_list.clear()
-        for path in file_paths:
-            self.selected_files_list.addItem(str(path))
+    def confirm_image_batch(self, file_count: int) -> bool:
+        answer = QMessageBox.question(
+            self,
+            "确认图像批次",
+            f"当前选中了 {file_count} 张图片。\n请确认这些图片属于同一批次，是否继续提交？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        return answer == QMessageBox.Yes
+
+    def set_browser_root(self, root_path: Path) -> None:
+        self.file_browser.set_root_path(root_path)
 
     def set_product_models(self, models: list[dict]) -> None:
         self.product_model_combo.clear()
@@ -337,6 +343,7 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
             self.job_label.setText("尚未选择任务")
             self.server_status_label.setText("状态: -")
             self.server_stage_label.setText("阶段: -")
+            self.server_message_label.setText("说明: -")
             self.server_progress_bar.setValue(0)
             self.transfer_status_label.setText("传输状态: 空闲")
             self.transfer_speed_label.setText("实时网速: -")
@@ -348,6 +355,7 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
         self.job_label.setText(f"当前任务: {job_ref}")
         self.server_status_label.setText(f"状态: {state.status}")
         self.server_stage_label.setText(f"阶段: {state.stage}")
+        self.server_message_label.setText(f"说明: {state.current_message or '-'}")
         self.server_progress_bar.setValue(state.progress)
 
         transfer = state.transfer
@@ -357,6 +365,12 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
             f"已传输: {self._format_bytes(transfer.bytes_transferred)} / {self._format_bytes(transfer.total_bytes)}"
         )
         self.transfer_progress_bar.setValue(transfer.progress_percent)
+
+    def preview_file(self, path: Path | None) -> None:
+        if path is None:
+            self.point_cloud_view.clear_view()
+            return
+        self.point_cloud_view.preview_file(path)
 
     def render_result(self, state: JobViewState | None, segmentation_path: Path | None = None) -> None:
         if state is None or state.result is None:

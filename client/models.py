@@ -49,6 +49,7 @@ class JobViewState:
     status: str = "uploaded"
     stage: str = "upload"
     progress: int = 0
+    current_message: str = ""
     error: str | None = None
     result: dict | None = None
     result_loading: bool = False

@@ -110,6 +110,7 @@ class JobRecord(BaseModel):
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     current_stage: JobStage = JobStage.UPLOAD
     current_progress: int = 0
+    current_message: str = ""
     queue_name: str | None = None
     uploads: list[str] = Field(default_factory=list)
     client_meta: dict[str, Any] = Field(default_factory=dict)
@@ -124,6 +125,7 @@ class CreateJobResponse(BaseModel):
     status: JobStatus
     current_stage: JobStage
     current_progress: int
+    current_message: str = ""
 
 
 class JobStatusResponse(BaseModel):
@@ -131,6 +133,8 @@ class JobStatusResponse(BaseModel):
     status: JobStatus
     current_stage: JobStage
     current_progress: int
+    current_message: str = ""
     queue_name: str | None = None
     updated_at: datetime
     error: str | None = None
+    stage_history: list[StageState] = Field(default_factory=list)
