@@ -10,3 +10,9 @@ def dispatch_job(job_id: str) -> None:
         run_job_task.delay(job_id)
     else:
         local_dispatcher.submit_pipeline(job_id)
+
+
+def shutdown_dispatcher() -> None:
+    settings = get_settings()
+    if not settings.use_celery:
+        local_dispatcher.shutdown()

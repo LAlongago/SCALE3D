@@ -56,6 +56,10 @@ class LocalQueueDispatcher:
         future = self.executors[queue_name].submit(fn, *args, **kwargs)
         return future.result()
 
+    def shutdown(self) -> None:
+        for executor in self.executors.values():
+            executor.shutdown(wait=False, cancel_futures=True)
+
 
 local_dispatcher = LocalQueueDispatcher()
 
@@ -125,7 +129,8 @@ def _run_pointcloud_validation_stage(pointcloud_path: Path) -> dict:
 
 def run_job_pipeline(job_id: str) -> None:
     repo = FileJobRepository()
-    paths = build_project_paths(get_settings().runtime_root)
+    settings = get_settings()
+    paths = build_project_paths(settings.runtime_root)
     record = repo.get(job_id)
     product_model = get_product_model(record.product_model_id)
     job_dir = repo.job_dir(job_id)
@@ -359,9 +364,15 @@ def run_job_pipeline(job_id: str) -> None:
         result.reports.json_path = "artifacts/inspection_report.json"
         repo.set_result(job_id, result)
         repo.mark_succeeded(job_id)
+        if settings.cleanup_workspace_on_success:
+            repo.cleanup_job_temp_resources(job_id)
+            logger.info("Job %s temporary resources cleaned after success.", job_id)
         logger.info("Job %s completed successfully.", job_id)
     except Exception as exc:
         repo.mark_failed(job_id, repo.get(job_id).current_stage, str(exc))
+        if settings.cleanup_workspace_on_failure:
+            repo.cleanup_job_temp_resources(job_id)
+            logger.info("Job %s temporary resources cleaned after failure.", job_id)
         logger.exception("Job %s failed: %s", job_id, exc)
         raise
 

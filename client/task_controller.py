@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import tempfile
 from pathlib import Path
 from uuid import uuid4
@@ -9,6 +10,7 @@ from client.background import start_background_task
 from client.main_window import MainWindow
 from client.models import JobViewState, TransferProgress, TransferState
 from shared.enums import InputType
+from shared.settings import get_settings
 from shared.validators import validate_image_paths, validate_pointcloud_path
 
 try:  # pragma: no cover - UI widgets are not unit-tested
@@ -48,6 +50,13 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
 
         self.window.append_log(f"客户端已连接到服务器: {self.api.base_url}")
         self.load_product_models()
+
+    def cleanup(self) -> None:
+        self.poll_timer.stop()
+        self.selected_files = []
+        self.job_states.clear()
+        if get_settings().client_cleanup_cache_on_exit:
+            shutil.rmtree(self.cache_dir, ignore_errors=True)
 
     def load_product_models(self) -> None:
         self.window.set_product_models_loading()

@@ -11,7 +11,7 @@ import uvicorn
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
-from server.dispatcher import dispatch_job
+from server.dispatcher import dispatch_job, shutdown_dispatcher
 from server.repository import FileJobRepository
 from shared.enums import InputType
 from shared.product_models import get_product_model, load_product_models
@@ -27,6 +27,25 @@ def _check_token(authorization: str | None) -> None:
     token = get_settings().api_token
     if token and authorization != f"Bearer {token}":
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+@app.on_event("startup")
+def on_startup() -> None:
+    settings = get_settings()
+    repo = FileJobRepository()
+    deleted = repo.cleanup_expired_jobs(settings.job_retention_hours)
+    if deleted:
+        logger.info("Cleaned expired jobs on startup: %s", ", ".join(deleted))
+
+
+@app.on_event("shutdown")
+def on_shutdown() -> None:
+    settings = get_settings()
+    repo = FileJobRepository()
+    deleted = repo.cleanup_expired_jobs(settings.job_retention_hours)
+    shutdown_dispatcher()
+    if deleted:
+        logger.info("Cleaned expired jobs on shutdown: %s", ", ".join(deleted))
 
 
 @app.get("/api/v1/product-models")

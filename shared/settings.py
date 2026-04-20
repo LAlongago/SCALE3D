@@ -21,6 +21,10 @@ class Settings:
     dgs_command: str | None
     pointcept_python: Path
     pc_skeletor_python: Path
+    cleanup_workspace_on_success: bool
+    cleanup_workspace_on_failure: bool
+    job_retention_hours: int
+    client_cleanup_cache_on_exit: bool
     local_reconstruction_workers: int
     local_segmentation_workers: int
     local_geometry_workers: int
@@ -58,6 +62,10 @@ def get_settings() -> Settings:
                 "/home/qwer/miniconda3/envs/pc-skeletor/bin/python",
             )
         ).resolve(),
+        cleanup_workspace_on_success=os.environ.get("PIS_CLEANUP_WORKSPACE_ON_SUCCESS", "1") == "1",
+        cleanup_workspace_on_failure=os.environ.get("PIS_CLEANUP_WORKSPACE_ON_FAILURE", "1") == "1",
+        job_retention_hours=int(os.environ.get("PIS_JOB_RETENTION_HOURS", "168")),
+        client_cleanup_cache_on_exit=os.environ.get("PIS_CLIENT_CLEANUP_CACHE_ON_EXIT", "1") == "1",
         local_reconstruction_workers=int(
             os.environ.get("PIS_LOCAL_RECONSTRUCTION_WORKERS", "1")
         ),

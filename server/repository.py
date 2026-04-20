@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -44,6 +45,27 @@ class FileJobRepository:
 
     def result_path(self, job_id: str) -> Path:
         return self.job_dir(job_id) / "result.json"
+
+    def cleanup_job_temp_resources(self, job_id: str) -> None:
+        for directory in (self.uploads_dir(job_id), self.workspace_dir(job_id)):
+            shutil.rmtree(directory, ignore_errors=True)
+
+    def delete_job(self, job_id: str) -> None:
+        shutil.rmtree(self.job_dir(job_id), ignore_errors=True)
+
+    def cleanup_expired_jobs(self, retention_hours: int) -> list[str]:
+        if retention_hours <= 0:
+            return []
+        now = datetime.utcnow()
+        deleted: list[str] = []
+        for record in self.list_jobs():
+            if record.status not in {JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED}:
+                continue
+            age_seconds = (now - record.updated_at).total_seconds()
+            if age_seconds >= retention_hours * 3600:
+                self.delete_job(record.job_id)
+                deleted.append(record.job_id)
+        return deleted
 
     def create_job(
         self,

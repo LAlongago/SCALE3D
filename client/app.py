@@ -16,6 +16,7 @@ def main() -> None:  # pragma: no cover - client entrypoint is not unit-tested
     window = MainWindow()
     controller = ClientTaskController(window)
     window._controller = controller  # type: ignore[attr-defined]
+    app.aboutToQuit.connect(controller.cleanup)
     window.show()
     sys.exit(app.exec())
 
