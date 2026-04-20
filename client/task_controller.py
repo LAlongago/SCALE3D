@@ -46,6 +46,7 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         self.window.part_row_selected.connect(self.handle_part_row_selected)
         self.window.point_cloud_part_picked.connect(self.handle_point_cloud_part_picked)
 
+        self.window.append_log(f"客户端已连接到服务器: {self.api.base_url}")
         self.load_product_models()
 
     def load_product_models(self) -> None:
@@ -214,6 +215,7 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         self.window.append_log(f"任务已创建: {state.job_id}")
         if not self.poll_timer.isActive():
             self.poll_timer.start()
+        self._refresh_single_job(task_key)
 
     def refresh_all_job_statuses(self) -> None:
         active_states = [
@@ -245,8 +247,9 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         if state is None:
             return
         state.status_in_flight = False
+        self.window.append_log(f"刷新任务失败: {state.job_id or task_key} | {message}")
         if self.selected_task_key == task_key:
-            self.window.append_log(f"刷新任务失败: {message}")
+            self.window.show_error("状态刷新失败", message)
 
     def _on_job_status_loaded(self, task_key: str, payload: dict) -> None:
         state = self.job_states[task_key]
@@ -275,6 +278,7 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         if state.job_id is None:
             return
         state.result_loading = True
+        self.window.append_log(f"开始加载任务结果: {state.job_id}")
 
         def _run(progress_emit):
             result = self.api.get_result(state.job_id)
@@ -308,6 +312,7 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         state.transfer.active = False
         state.transfer.status_text = "结果下载失败"
         self.window.upsert_job(state)
+        self.window.append_log(f"结果加载失败: {state.job_id or task_key} | {message}")
         if self.selected_task_key == task_key:
             self.window.show_error("结果加载失败", message)
 
@@ -320,6 +325,7 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         state.transfer.status_text = "结果下载完成"
         state.transfer.progress_percent = 100
         self.window.upsert_job(state)
+        self.window.append_log(f"结果加载完成: {state.job_id or task_key}")
         if self.selected_task_key == task_key:
             self.window.render_result(state, Path(bundle["segmentation_path"]))
             self.window.append_log(f"任务 {state.job_id} 的结果已加载。")

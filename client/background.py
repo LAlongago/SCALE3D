@@ -34,6 +34,9 @@ class BackgroundTask(QRunnable):  # pragma: no cover - UI widgets are not unit-t
             self.signals.finished.emit(result)
 
 
+_ACTIVE_TASKS: set[BackgroundTask] = set()
+
+
 def start_background_task(
     thread_pool: QThreadPool,
     fn: Callable[[Callable[[object], None]], Any],
@@ -43,8 +46,21 @@ def start_background_task(
     on_progress: Callable[[object], None] | None = None,
 ) -> None:
     task = BackgroundTask(fn)
-    task.signals.finished.connect(on_finished)
-    task.signals.error.connect(on_error)
+    _ACTIVE_TASKS.add(task)
+
+    def _release_task(*_args) -> None:
+        _ACTIVE_TASKS.discard(task)
+
+    def _handle_finished(result: Any) -> None:
+        _release_task()
+        on_finished(result)
+
+    def _handle_error(message: str) -> None:
+        _release_task()
+        on_error(message)
+
+    task.signals.finished.connect(_handle_finished)
+    task.signals.error.connect(_handle_error)
     if on_progress is not None:
         task.signals.progress.connect(on_progress)
     thread_pool.start(task)
