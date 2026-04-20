@@ -19,6 +19,8 @@ class Settings:
     server_url: str
     colmap_command: str | None
     dgs_command: str | None
+    pointcept_python: Path
+    pc_skeletor_python: Path
     local_reconstruction_workers: int
     local_segmentation_workers: int
     local_geometry_workers: int
@@ -44,6 +46,18 @@ def get_settings() -> Settings:
         server_url=os.environ.get("PIS_SERVER_URL", "http://127.0.0.1:8000"),
         colmap_command=os.environ.get("PIS_COLMAP_COMMAND"),
         dgs_command=os.environ.get("PIS_3DGS_COMMAND"),
+        pointcept_python=Path(
+            os.environ.get(
+                "PIS_POINTCEPT_PYTHON",
+                "/home/qwer/miniconda3/envs/pointcept/bin/python",
+            )
+        ).resolve(),
+        pc_skeletor_python=Path(
+            os.environ.get(
+                "PIS_PC_SKELETOR_PYTHON",
+                "/home/qwer/miniconda3/envs/pc-skeletor/bin/python",
+            )
+        ).resolve(),
         local_reconstruction_workers=int(
             os.environ.get("PIS_LOCAL_RECONSTRUCTION_WORKERS", "1")
         ),

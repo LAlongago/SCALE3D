@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
-import sys
 from pathlib import Path
+
+from shared.settings import get_settings
+
+logger = logging.getLogger("scale3d.geometry")
 
 
 def _run_command(command: list[str], workdir: Path) -> None:
+    logger.info("Executing external geometry command: %s", " ".join(command))
     completed = subprocess.run(
         command,
         cwd=str(workdir),
@@ -14,6 +19,10 @@ def _run_command(command: list[str], workdir: Path) -> None:
         text=True,
         check=False,
     )
+    if completed.stdout:
+        logger.info("Geometry stdout:\n%s", completed.stdout.rstrip())
+    if completed.stderr:
+        logger.info("Geometry stderr:\n%s", completed.stderr.rstrip())
     if completed.returncode != 0:
         raise RuntimeError(
             f"Command failed ({completed.returncode}): {' '.join(command)}\n"
@@ -27,12 +36,13 @@ def run_skeleton_and_length(
     pred_npy: Path,
     output_dir: Path,
 ) -> dict[str, Path]:
+    settings = get_settings()
     skeleton_script = ut_root / "pc-skeletor" / "tools" / "skeletonize_pointcept_instances.py"
     length_script = ut_root / "pc-skeletor" / "tools" / "compute_skeleton_curve_lengths.py"
     output_dir.mkdir(parents=True, exist_ok=True)
     _run_command(
         [
-            sys.executable,
+            str(settings.pc_skeletor_python),
             str(skeleton_script),
             "--coord-npy",
             str(coord_npy),
@@ -53,7 +63,7 @@ def run_skeleton_and_length(
     )
     _run_command(
         [
-            sys.executable,
+            str(settings.pc_skeletor_python),
             str(length_script),
             "--skeleton-root",
             str(output_dir),
