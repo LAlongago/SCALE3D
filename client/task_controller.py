@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import shutil
 import tempfile
+from datetime import datetime
 from pathlib import Path
-from uuid import uuid4
 
 from client.api_client import ApiClient
 from client.background import start_background_task
@@ -22,6 +22,10 @@ except ImportError:  # pragma: no cover
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 POINTCLOUD_SUFFIXES = {".ply"}
+JOB_ID_PREFIXES = {
+    InputType.IMAGE_SET.value: "Images",
+    InputType.POINT_CLOUD.value: "Pointcloud",
+}
 
 
 class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
@@ -83,10 +87,6 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         except Exception as exc:
             self.window.clear_result()
             self.window.show_error("预览失败", f"无法预览文件 {preview_target.name if preview_target else ''}: {exc}")
-            if preview_target is not None:
-                self.window.append_log(f"预览失败: {preview_target.name} | {exc}")
-        if preview_target is not None:
-            self.window.append_log(f"已选择文件: {preview_target.name}")
 
     def submit_job(self) -> None:
         if not self.selected_files:
@@ -148,7 +148,7 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
     def _submit_single_job(self, product_model_id: str, input_type: str, file_paths: list[Path]) -> None:
         file_names = [path.name for path in file_paths]
         display_name = file_names[0] if len(file_names) == 1 else f"{file_names[0]} 等 {len(file_names)} 个文件"
-        task_key = uuid4().hex
+        task_key = self._build_local_job_id(input_type)
         state = JobViewState(
             task_key=task_key,
             input_type=input_type,
@@ -162,8 +162,9 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         )
         self.job_states[task_key] = state
         self.window.upsert_job(state)
+        self._update_queue_count()
         self.window.select_task(task_key)
-        self.window.append_log(f"开始提交任务: {display_name}")
+        self.window.append_log("开始提交任务", task_id=task_key, status="上传中")
 
         def _run(progress_emit):
             return self.api.create_job(
@@ -196,6 +197,7 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
             state.progress = progress.progress_percent
             state.current_message = progress.status_text
         self.window.upsert_job(state)
+        self._update_queue_count()
 
     def _on_submit_failed(self, task_key: str, message: str) -> None:
         state = self.job_states.get(task_key)
@@ -207,11 +209,14 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         state.transfer.active = False
         state.transfer.status_text = "上传失败"
         self.window.upsert_job(state)
+        self._update_queue_count()
+        self.window.append_log(message, task_id=state.job_id or task_key, status="提交失败")
         if self.selected_task_key == task_key:
             self.window.show_error("提交失败", message)
 
     def _on_job_created(self, task_key: str, response: dict) -> None:
         state = self.job_states[task_key]
+        local_task_id = state.task_key
         state.job_id = response["job_id"]
         state.status = response["status"]
         state.stage = response["current_stage"]
@@ -221,7 +226,10 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         state.transfer.status_text = "上传完成，等待服务器处理"
         state.transfer.progress_percent = 100
         self.window.upsert_job(state)
-        self.window.append_log(f"任务已创建: {state.job_id}")
+        if state.job_id != local_task_id:
+            self.window.replace_log_task_id(local_task_id, state.job_id)
+        self._update_queue_count()
+        self.window.append_log("任务已创建", task_id=state.job_id, status=state.status)
         if not self.poll_timer.isActive():
             self.poll_timer.start()
         self._refresh_single_job(task_key)
@@ -256,7 +264,7 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         if state is None:
             return
         state.status_in_flight = False
-        self.window.append_log(f"刷新任务失败: {state.job_id or task_key} | {message}")
+        self.window.append_log(message, task_id=state.job_id or task_key, status="刷新任务失败")
         if self.selected_task_key == task_key:
             self.window.show_error("状态刷新失败", message)
 
@@ -272,6 +280,7 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         if state.status not in {"uploading"} and not state.transfer.active:
             state.transfer.status_text = "等待中" if state.status == "queued" else "服务器处理中"
         self.window.upsert_job(state)
+        self._update_queue_count()
 
         current_signature = (state.status, state.stage, state.progress, state.current_message)
         should_log_progress = (
@@ -282,7 +291,9 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         if should_log_progress:
             state.last_log_signature = current_signature
             self.window.append_log(
-                f"任务 {state.job_id}: 状态={state.status} 阶段={state.stage} 进度={state.progress}% 说明={state.current_message}"
+                f"{state.stage} | {state.progress}% | {state.current_message}",
+                task_id=state.job_id,
+                status=state.status,
             )
 
         if state.status == "succeeded" and state.result is None and not state.result_loading:
@@ -295,20 +306,31 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         if state.job_id is None:
             return
         state.result_loading = True
-        self.window.append_log(f"开始加载任务结果: {state.job_id}")
+        self.window.append_log("开始加载任务结果", task_id=state.job_id, status=state.status)
 
         def _run(progress_emit):
             result = self.api.get_result(state.job_id)
-            segmentation_path = self.cache_dir / task_key / "segmentation_pred.ply"
+            artifacts = self.api.list_artifacts(state.job_id)
+            task_cache_dir = self.cache_dir / task_key
+            segmentation_path = task_cache_dir / "segmentation_pred.ply"
             self.api.download_artifact(
                 state.job_id,
                 "segmentation_pred.ply",
                 segmentation_path,
                 progress_callback=progress_emit,
             )
+            skeleton_paths: list[str] = []
+            for artifact in artifacts:
+                name = artifact.get("name", "")
+                if not (name.startswith("skeleton_") and name.endswith(".ply")):
+                    continue
+                target_path = task_cache_dir / name
+                self.api.download_artifact(state.job_id, name, target_path)
+                skeleton_paths.append(str(target_path))
             return {
                 "result": result,
                 "segmentation_path": str(segmentation_path),
+                "skeleton_paths": skeleton_paths,
             }
 
         start_background_task(
@@ -329,7 +351,7 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         state.transfer.active = False
         state.transfer.status_text = "结果下载失败"
         self.window.upsert_job(state)
-        self.window.append_log(f"结果加载失败: {state.job_id or task_key} | {message}")
+        self.window.append_log(message, task_id=state.job_id or task_key, status="结果加载失败")
         if self.selected_task_key == task_key:
             self.window.show_error("结果加载失败", message)
 
@@ -342,15 +364,21 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         state.transfer.status_text = "结果下载完成"
         state.transfer.progress_percent = 100
         self.window.upsert_job(state)
-        self.window.append_log(f"结果加载完成: {state.job_id or task_key}")
+        self._update_queue_count()
+        self.window.append_log("结果加载完成", task_id=state.job_id or task_key, status=state.status)
         if self.selected_task_key == task_key:
-            self.window.render_result(state, Path(bundle["segmentation_path"]))
-            self.window.append_log(f"任务 {state.job_id} 的结果已加载。")
+            self.window.render_result(
+                state,
+                Path(bundle["segmentation_path"]),
+                [Path(item) for item in bundle.get("skeleton_paths", [])],
+            )
+            self.window.append_log("结果已加载", task_id=state.job_id, status="完成")
 
     def handle_task_selection(self, task_key: str | None) -> None:
         self.selected_task_key = task_key
         state = self.job_states.get(task_key) if task_key else None
         self.window.show_job_details(state)
+        self.window.update_status_transfer(state)
         if state is None:
             self.window.clear_result()
             preview_target = self.selected_files[0] if self.selected_files else None
@@ -358,7 +386,12 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
             return
         if state.result is not None:
             segmentation_path = self.cache_dir / task_key / "segmentation_pred.ply"
-            self.window.render_result(state, segmentation_path if segmentation_path.exists() else None)
+            skeleton_paths = sorted((self.cache_dir / task_key).glob("skeleton_*.ply"))
+            self.window.render_result(
+                state,
+                segmentation_path if segmentation_path.exists() else None,
+                skeleton_paths,
+            )
         elif state.status == "succeeded" and not state.result_loading:
             self._load_result(task_key)
         else:
@@ -398,8 +431,24 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
             return
         part = state.result["segmentation"][row]
         self.window.highlight_part(part["part_id"])
-        self.window.append_log(f"选中部件: {part['part_name']}")
+        self.window.append_log(part["part_name"], task_id=state.job_id, status="选中部件")
 
     def handle_point_cloud_part_picked(self, part_id: int, text: str) -> None:
         if self.selected_task_key:
-            self.window.append_log(f"点选部件 {part_id}: {text}")
+            state = self.job_states.get(self.selected_task_key)
+            self.window.append_log(text, task_id=None if state is None else state.job_id, status=f"点选部件 {part_id}")
+
+    def _update_queue_count(self) -> None:
+        count = sum(1 for state in self.job_states.values() if not state.is_terminal)
+        self.window.set_queue_count(count)
+
+    def _build_local_job_id(self, input_type: str) -> str:
+        prefix = JOB_ID_PREFIXES.get(input_type, "Job")
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+        base_id = f"{prefix}_{timestamp}"
+        task_id = base_id
+        suffix = 1
+        while task_id in self.job_states:
+            suffix += 1
+            task_id = f"{base_id}_{suffix:02d}"
+        return task_id

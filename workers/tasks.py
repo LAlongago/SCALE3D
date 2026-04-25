@@ -115,6 +115,33 @@ def _copy_into_artifacts(repo: FileJobRepository, job_id: str, source: Path, nam
     return destination
 
 
+def _copy_skeleton_artifacts(repo: FileJobRepository, job_id: str, skeleton_summary_path: Path) -> list[Path]:
+    payload = json.loads(skeleton_summary_path.read_text(encoding="utf-8"))
+    copied: list[Path] = []
+    full = payload.get("full")
+    if isinstance(full, dict) and full.get("status") == "ok" and full.get("skeleton_ply"):
+        source = Path(full["skeleton_ply"])
+        if source.exists():
+            copied.append(
+                _copy_into_artifacts(repo, job_id, source, "skeleton_full.ply", ArtifactKind.GEOMETRY)
+            )
+
+    for group in payload.get("groups", []):
+        if not isinstance(group, dict):
+            continue
+        if group.get("status") != "ok" or not group.get("skeleton_ply"):
+            continue
+        label = group.get("label", group.get("name"))
+        if label is None:
+            continue
+        source = Path(group["skeleton_ply"])
+        if source.exists():
+            copied.append(
+                _copy_into_artifacts(repo, job_id, source, f"skeleton_part_{label}.ply", ArtifactKind.GEOMETRY)
+            )
+    return copied
+
+
 def _build_segmentation_summary(product_model, segmentation_rows: list[SegmentationPartResult]) -> SegmentationSummary:
     detected_parts = sum(item.point_count > 0 for item in segmentation_rows)
     missing = [item.part_id for item in segmentation_rows if item.point_count == 0]
@@ -367,6 +394,7 @@ def _stage_skeletonization_and_length(job_id: str) -> PipelineStep:
         "curve_length_summary.csv",
         ArtifactKind.GEOMETRY,
     )
+    _copy_skeleton_artifacts(repo, job_id, geometry_outputs["summary_json"])
     return REPORT_GENERATION_STEP
 
 
@@ -673,6 +701,7 @@ def run_job_pipeline(job_id: str) -> None:
             "curve_length_summary.csv",
             ArtifactKind.GEOMETRY,
         )
+        _copy_skeleton_artifacts(repo, job_id, geometry_outputs["summary_json"])
 
         curve_length_map = parse_curve_length_summary(geometry_outputs["curve_length_json"])
         length_rows = _build_length_rows(product_model, curve_length_map)

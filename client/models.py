@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 
 
 @dataclass
@@ -46,6 +47,7 @@ class JobViewState:
     product_model_id: str
     display_name: str
     job_id: str | None = None
+    created_at: datetime = field(default_factory=datetime.now)
     status: str = "uploaded"
     stage: str = "upload"
     progress: int = 0

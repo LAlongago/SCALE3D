@@ -9,9 +9,10 @@ from shared.enums import InputType
 
 try:  # pragma: no cover - UI widgets are not unit-tested
     from PySide6.QtCore import Qt, Signal
-    from PySide6.QtGui import QFont
+    from PySide6.QtGui import QAction, QFont
     from PySide6.QtWidgets import (
         QComboBox,
+        QCheckBox,
         QFileDialog,
         QGridLayout,
         QGroupBox,
@@ -27,7 +28,6 @@ try:  # pragma: no cover - UI widgets are not unit-tested
         QSplitter,
         QTableWidget,
         QTableWidgetItem,
-        QTextEdit,
         QVBoxLayout,
         QWidget,
     )
@@ -51,6 +51,8 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
         self.setWindowTitle("SCALE3D检测系统")
         self.resize(1600, 900)
         self._apply_stylesheet()
+        self._build_menu_bar()
+        self._build_status_bar()
         self._build_ui()
 
     def _apply_stylesheet(self) -> None:
@@ -97,14 +99,14 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
         QPushButton[class="primary"]:hover {
             background-color: #0073e6;
         }
-        QComboBox, QListWidget, QTextEdit, QTableWidget, QTreeView {
+        QComboBox, QListWidget, QTableWidget, QTreeView {
             background-color: #252526;
             border: 1px solid #3c3c3c;
             border-radius: 4px;
             padding: 4px;
             color: #d4d4d4;
         }
-        QComboBox:hover, QListWidget:hover, QTextEdit:hover, QTableWidget:hover, QTreeView:hover {
+        QComboBox:hover, QListWidget:hover, QTableWidget:hover, QTreeView:hover {
             border: 1px solid #4daafc;
         }
         QHeaderView::section {
@@ -135,6 +137,32 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
         }
         """
         self.setStyleSheet(style)
+
+    def _build_menu_bar(self) -> None:
+        file_menu = self.menuBar().addMenu("文件")
+        export_pdf_action = QAction("导出 PDF 报告", self)
+        export_json_action = QAction("导出 JSON 结果", self)
+        export_ply_action = QAction("导出分割点云", self)
+        export_pdf_action.triggered.connect(lambda: self.export_requested.emit("inspection_report.pdf"))
+        export_json_action.triggered.connect(lambda: self.export_requested.emit("inspection_report.json"))
+        export_ply_action.triggered.connect(lambda: self.export_requested.emit("segmentation_pred.ply"))
+        file_menu.addAction(export_pdf_action)
+        file_menu.addAction(export_json_action)
+        file_menu.addAction(export_ply_action)
+
+        view_menu = self.menuBar().addMenu("查看")
+        refresh_action = QAction("刷新任务状态", self)
+        show_selected_action = QAction("查看选中任务", self)
+        refresh_action.triggered.connect(self.refresh_requested.emit)
+        show_selected_action.triggered.connect(lambda: self.task_selected.emit(self.current_task_key()))
+        view_menu.addAction(refresh_action)
+        view_menu.addAction(show_selected_action)
+
+    def _build_status_bar(self) -> None:
+        self.status_transfer_label = QLabel("传输: - | 进度: -")
+        self.status_queue_label = QLabel("队列任务: 0")
+        self.statusBar().addWidget(self.status_transfer_label, 1)
+        self.statusBar().addPermanentWidget(self.status_queue_label)
 
     def _build_ui(self) -> None:
         central = QWidget(self)
@@ -197,6 +225,18 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
         view_label.setFont(font)
         center_layout.addWidget(view_label)
 
+        view_options = QHBoxLayout()
+        self.show_object_cloud_checkbox = QCheckBox("显示物体点云")
+        self.show_skeleton_checkbox = QCheckBox("显示骨架")
+        self.show_object_cloud_checkbox.setChecked(True)
+        self.show_skeleton_checkbox.setChecked(True)
+        self.show_object_cloud_checkbox.toggled.connect(self._toggle_object_cloud)
+        self.show_skeleton_checkbox.toggled.connect(self._toggle_skeleton)
+        view_options.addWidget(self.show_object_cloud_checkbox)
+        view_options.addWidget(self.show_skeleton_checkbox)
+        view_options.addStretch(1)
+        center_layout.addLayout(view_options)
+
         self.point_cloud_view = PointCloudView(on_part_selected=self._emit_point_cloud_pick)
         center_layout.addWidget(self.point_cloud_view, 1)
 
@@ -247,28 +287,17 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
         self.parts_table.itemSelectionChanged.connect(self._emit_part_row_selected)
         right_layout.addWidget(self.parts_table, 1)
 
-        export_box = QGroupBox("数据导出")
-        export_layout = QGridLayout(export_box)
-        export_layout.setSpacing(10)
-        self.export_pdf_button = QPushButton("导出 PDF 报告")
-        self.export_json_button = QPushButton("导出 JSON 结果")
-        self.export_ply_button = QPushButton("导出分割点云")
-        self.refresh_button = QPushButton("刷新全部任务")
-        self.refresh_button.clicked.connect(self.refresh_requested.emit)
-        self.export_pdf_button.clicked.connect(lambda: self.export_requested.emit("inspection_report.pdf"))
-        self.export_json_button.clicked.connect(lambda: self.export_requested.emit("inspection_report.json"))
-        self.export_ply_button.clicked.connect(lambda: self.export_requested.emit("segmentation_pred.ply"))
-        export_layout.addWidget(self.refresh_button, 0, 0, 1, 2)
-        export_layout.addWidget(self.export_pdf_button, 1, 0)
-        export_layout.addWidget(self.export_json_button, 1, 1)
-        export_layout.addWidget(self.export_ply_button, 2, 0, 1, 2)
-        right_layout.addWidget(export_box)
-
         log_box = QGroupBox("运行日志")
         log_layout = QVBoxLayout(log_box)
-        self.status_text = QTextEdit()
-        self.status_text.setReadOnly(True)
-        log_layout.addWidget(self.status_text)
+        self.log_table = QTableWidget(0, 3)
+        self.log_table.setHorizontalHeaderLabels(["任务编号", "状态", "时间"])
+        self.log_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.log_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.log_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.log_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.log_table.setColumnWidth(0, 260)
+        self.log_table.verticalHeader().setVisible(False)
+        log_layout.addWidget(self.log_table)
         right_layout.addWidget(log_box, 1)
 
         splitter.addWidget(left_panel)
@@ -349,9 +378,10 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
             self.transfer_speed_label.setText("实时网速: -")
             self.transfer_bytes_label.setText("已传输: -")
             self.transfer_progress_bar.setValue(0)
+            self.update_status_transfer(None)
             return
 
-        job_ref = state.job_id if state.job_id else state.task_key[:8]
+        job_ref = state.job_id if state.job_id else state.task_key
         self.job_label.setText(f"当前任务: {job_ref}")
         self.server_status_label.setText(f"状态: {state.status}")
         self.server_stage_label.setText(f"阶段: {state.stage}")
@@ -365,6 +395,7 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
             f"已传输: {self._format_bytes(transfer.bytes_transferred)} / {self._format_bytes(transfer.total_bytes)}"
         )
         self.transfer_progress_bar.setValue(transfer.progress_percent)
+        self.update_status_transfer(state)
 
     def preview_file(self, path: Path | None) -> None:
         if path is None:
@@ -372,7 +403,12 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
             return
         self.point_cloud_view.preview_file(path)
 
-    def render_result(self, state: JobViewState | None, segmentation_path: Path | None = None) -> None:
+    def render_result(
+        self,
+        state: JobViewState | None,
+        segmentation_path: Path | None = None,
+        skeleton_paths: list[Path] | None = None,
+    ) -> None:
         if state is None or state.result is None:
             self.parts_table.setRowCount(0)
             self.point_cloud_view.clear_view()
@@ -396,12 +432,39 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
         self.point_cloud_view.set_lookup(part_names, length_map)
         if segmentation_path is not None:
             self.point_cloud_view.load_segmentation_ply(segmentation_path)
+        if skeleton_paths:
+            self.point_cloud_view.load_skeleton_plys(skeleton_paths)
 
     def highlight_part(self, part_id: int) -> None:
         self.point_cloud_view.highlight_part(part_id)
 
-    def append_log(self, message: str) -> None:
-        self.status_text.append(message)
+    def append_log(self, message: str, task_id: str | None = None, status: str | None = None) -> None:
+        from datetime import datetime
+
+        row = self.log_table.rowCount()
+        self.log_table.insertRow(row)
+        self.log_table.setItem(row, 0, QTableWidgetItem(task_id or "-"))
+        self.log_table.setItem(row, 1, QTableWidgetItem(status or message))
+        self.log_table.setItem(row, 2, QTableWidgetItem(datetime.now().strftime("%H:%M:%S")))
+        self.log_table.scrollToBottom()
+
+    def replace_log_task_id(self, old_task_id: str, new_task_id: str) -> None:
+        for row in range(self.log_table.rowCount()):
+            item = self.log_table.item(row, 0)
+            if item is not None and item.text() == old_task_id:
+                item.setText(new_task_id)
+
+    def update_status_transfer(self, state: JobViewState | None) -> None:
+        if state is None:
+            self.status_transfer_label.setText("传输: - | 进度: -")
+            return
+        transfer = state.transfer
+        self.status_transfer_label.setText(
+            f"传输: {self._format_speed(transfer.speed_bps)} | 进度: {transfer.progress_percent}%"
+        )
+
+    def set_queue_count(self, count: int) -> None:
+        self.status_queue_label.setText(f"队列任务: {count}")
 
     def clear_result(self) -> None:
         self.parts_table.setRowCount(0)
@@ -427,20 +490,15 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
     def _emit_point_cloud_pick(self, part_id: int, text: str) -> None:
         self.point_cloud_part_picked.emit(part_id, text)
 
+    def _toggle_object_cloud(self, checked: bool) -> None:
+        self.point_cloud_view.set_object_cloud_visible(checked)
+
+    def _toggle_skeleton(self, checked: bool) -> None:
+        self.point_cloud_view.set_skeleton_visible(checked)
+
     def _format_job_item_text(self, state: JobViewState) -> str:
-        job_ref = state.job_id[:8] if state.job_id else "本地任务"
-        transfer_line = ""
-        if state.transfer.active or state.transfer.bytes_transferred:
-            transfer_line = (
-                f"\n{state.transfer.status_text} | "
-                f"{state.transfer.progress_percent}% | "
-                f"{self._format_speed(state.transfer.speed_bps)}"
-            )
-        return (
-            f"{state.display_name}\n"
-            f"{job_ref} | {state.status} | {state.stage} | {state.progress}%"
-            f"{transfer_line}"
-        )
+        job_ref = state.job_id or state.task_key
+        return f"{job_ref}\n创建时间: {state.created_at.strftime('%Y-%m-%d %H:%M:%S')}"
 
     @staticmethod
     def _format_speed(speed_bps: float) -> str:

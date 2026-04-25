@@ -27,7 +27,11 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
         super().__init__(parent)
         self.on_part_selected = on_part_selected
         self.mesh = None
+        self.main_cloud_actor = None
         self.highlight_actor = None
+        self.skeleton_actors = []
+        self.show_object_cloud = True
+        self.show_skeleton = True
         self._image_pixmap = None
         self.length_map: dict[int, float | None] = {}
         self.part_names: dict[int, str] = {}
@@ -71,7 +75,9 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
 
     def clear_view(self) -> None:
         self.mesh = None
+        self.main_cloud_actor = None
         self.highlight_actor = None
+        self.skeleton_actors = []
         self._image_pixmap = None
         if self.plotter is not None:
             self._reset_plotter_scene()
@@ -113,9 +119,39 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
         self.plotter.add_axes(line_width=2, labels_off=True)
         self.mesh = pv.read(str(path))
         render_kwargs = self._build_point_cloud_render_kwargs()
-        self.plotter.add_mesh(self.mesh, **render_kwargs)
+        self.main_cloud_actor = self.plotter.add_mesh(self.mesh, **render_kwargs)
+        self.skeleton_actors = []
+        self._apply_visibility()
         self.plotter.reset_camera()
         self.stack.setCurrentWidget(self.plotter.interactor)
+
+    def load_skeleton_plys(self, paths: list[Path]) -> None:
+        if self.plotter is None or pv is None:
+            return
+        for actor in self.skeleton_actors:
+            self.plotter.remove_actor(actor, render=False)
+        self.skeleton_actors = []
+        for index, path in enumerate(paths):
+            if not path.exists():
+                continue
+            mesh = pv.read(str(path))
+            actor = self.plotter.add_mesh(
+                mesh,
+                color="#facc15",
+                point_size=7,
+                render_points_as_spheres=True,
+                name=f"skeleton_{index}",
+            )
+            self.skeleton_actors.append(actor)
+        self._apply_visibility()
+
+    def set_object_cloud_visible(self, visible: bool) -> None:
+        self.show_object_cloud = visible
+        self._apply_visibility()
+
+    def set_skeleton_visible(self, visible: bool) -> None:
+        self.show_skeleton = visible
+        self._apply_visibility()
 
     def highlight_part(self, part_id: int) -> None:
         if self.plotter is None or self.mesh is None:
@@ -215,9 +251,6 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
             if name in point_data and self._is_rgb_array(point_data[name]):
                 return name
 
-        for name in point_data.keys():
-            if self._is_rgb_array(point_data[name]):
-                return name
         return None
 
     def _has_rgb_components(self) -> bool:
@@ -243,6 +276,14 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
         if shape is None or len(shape) != 2:
             return False
         return shape[1] in {3, 4}
+
+    def _apply_visibility(self) -> None:
+        if self.main_cloud_actor is not None:
+            self.main_cloud_actor.SetVisibility(self.show_object_cloud)
+        for actor in self.skeleton_actors:
+            actor.SetVisibility(self.show_skeleton)
+        if self.plotter is not None:
+            self.plotter.render()
 
     def _reset_plotter_scene(self) -> None:
         if self.plotter is None:
