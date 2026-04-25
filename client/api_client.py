@@ -112,6 +112,10 @@ class ApiClient:
         response.raise_for_status()
         return response.json()
 
+    def delete_job(self, job_id: str) -> None:
+        response = self.session.delete(f"{self.base_url}/api/v1/jobs/{job_id}", timeout=30)
+        response.raise_for_status()
+
     def download_artifact(
         self,
         job_id: str,

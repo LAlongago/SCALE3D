@@ -141,6 +141,16 @@ def get_job(job_id: str, authorization: Annotated[str | None, Header()] = None):
     )
 
 
+@app.delete("/api/v1/jobs/{job_id}")
+def delete_job(job_id: str, authorization: Annotated[str | None, Header()] = None):
+    _check_token(authorization)
+    repo = FileJobRepository()
+    if not repo.job_dir(job_id).exists():
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' does not exist.")
+    repo.delete_job(job_id)
+    return {"job_id": job_id, "deleted": True}
+
+
 @app.get("/api/v1/jobs/{job_id}/result")
 def get_result(job_id: str, authorization: Annotated[str | None, Header()] = None):
     _check_token(authorization)

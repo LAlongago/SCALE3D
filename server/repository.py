@@ -55,19 +55,6 @@ class FileJobRepository:
         for directory in (self.uploads_dir(job_id), self.workspace_dir(job_id)):
             shutil.rmtree(directory, ignore_errors=True)
 
-    def export_job_outputs(self, job_id: str) -> Path:
-        output_dir = self.paths.project_root / "output" / job_id
-        output_dir.mkdir(parents=True, exist_ok=True)
-        for file_name in ("job.json", "result.json"):
-            source = self.job_dir(job_id) / file_name
-            if source.exists():
-                shutil.copy2(source, output_dir / file_name)
-        artifacts_source = self.artifacts_dir(job_id)
-        artifacts_target = output_dir / "artifacts"
-        if artifacts_source.exists():
-            shutil.copytree(artifacts_source, artifacts_target, dirs_exist_ok=True)
-        return output_dir
-
     def delete_job(self, job_id: str) -> None:
         shutil.rmtree(self.job_dir(job_id), ignore_errors=True)
 

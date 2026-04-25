@@ -459,7 +459,6 @@ def _stage_report_generation(job_id: str) -> None:
     result.reports.json_path = "artifacts/inspection_report.json"
     repo.set_result(job_id, result)
     repo.mark_succeeded(job_id)
-    repo.export_job_outputs(job_id)
     if get_settings().cleanup_workspace_on_success:
         repo.cleanup_job_temp_resources(job_id)
         logger.info("Job %s temporary resources cleaned after success.", job_id)
@@ -470,7 +469,6 @@ def _stage_report_generation(job_id: str) -> None:
 def _mark_job_failed(job_id: str, stage: JobStage, exc: BaseException) -> None:
     repo = FileJobRepository()
     repo.mark_failed(job_id, stage, str(exc))
-    repo.export_job_outputs(job_id)
     if get_settings().cleanup_workspace_on_failure:
         repo.cleanup_job_temp_resources(job_id)
         logger.info("Job %s temporary resources cleaned after failure.", job_id)
@@ -760,14 +758,12 @@ def run_job_pipeline(job_id: str) -> None:
         result.reports.json_path = "artifacts/inspection_report.json"
         repo.set_result(job_id, result)
         repo.mark_succeeded(job_id)
-        repo.export_job_outputs(job_id)
         if settings.cleanup_workspace_on_success:
             repo.cleanup_job_temp_resources(job_id)
             logger.info("Job %s temporary resources cleaned after success.", job_id)
         logger.info("Job %s completed successfully.", job_id)
     except Exception as exc:
         repo.mark_failed(job_id, repo.get(job_id).current_stage, str(exc))
-        repo.export_job_outputs(job_id)
         if settings.cleanup_workspace_on_failure:
             repo.cleanup_job_temp_resources(job_id)
             logger.info("Job %s temporary resources cleaned after failure.", job_id)

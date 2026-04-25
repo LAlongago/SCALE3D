@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import tempfile
 from datetime import datetime
@@ -46,6 +47,8 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         self.thread_pool = QThreadPool.globalInstance()
         self.cache_dir = Path(tempfile.gettempdir()) / "scale3d-client-cache"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.output_dir = Path(__file__).resolve().parents[1] / "output"
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         self.selected_files: list[Path] = []
         self.job_states: dict[str, JobViewState] = {}
         self.selected_task_key: str | None = None
@@ -317,8 +320,19 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         def _run(progress_emit):
             result = self.api.get_result(state.job_id)
             artifacts = self.api.list_artifacts(state.job_id)
-            task_cache_dir = self.cache_dir / task_key
-            segmentation_path = task_cache_dir / "segmentation_pred.ply"
+            task_output_dir = self.output_dir / state.job_id
+            artifacts_output_dir = task_output_dir / "artifacts"
+            artifacts_output_dir.mkdir(parents=True, exist_ok=True)
+            (task_output_dir / "result.json").write_text(
+                json.dumps(result, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            (task_output_dir / "artifacts.json").write_text(
+                json.dumps(artifacts, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            segmentation_path = artifacts_output_dir / "segmentation_pred.ply"
             self.api.download_artifact(
                 state.job_id,
                 "segmentation_pred.ply",
@@ -330,13 +344,25 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
                 name = artifact.get("name", "")
                 if not (name.startswith("skeleton_") and name.endswith(".ply")):
                     continue
-                target_path = task_cache_dir / name
+                target_path = artifacts_output_dir / name
                 self.api.download_artifact(state.job_id, name, target_path)
                 skeleton_paths.append(str(target_path))
+            for artifact in artifacts:
+                name = artifact.get("name", "")
+                if not name or name == "segmentation_pred.ply" or (name.startswith("skeleton_") and name.endswith(".ply")):
+                    continue
+                self.api.download_artifact(state.job_id, name, artifacts_output_dir / name)
+            server_cleanup_error = None
+            try:
+                self.api.delete_job(state.job_id)
+            except Exception as exc:
+                server_cleanup_error = str(exc)
             return {
                 "result": result,
                 "segmentation_path": str(segmentation_path),
                 "skeleton_paths": skeleton_paths,
+                "output_dir": str(task_output_dir),
+                "server_cleanup_error": server_cleanup_error,
             }
 
         start_background_task(
@@ -372,13 +398,21 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         self.window.upsert_job(state)
         self._update_queue_count()
         self.window.append_log("结果加载完成", task_id=state.job_id or task_key, status=self._status_text(state.status))
+        if bundle.get("server_cleanup_error"):
+            self.window.append_log(
+                f"服务器运行目录清理失败: {bundle['server_cleanup_error']}",
+                task_id=state.job_id or task_key,
+                status="清理失败",
+            )
+        else:
+            self.window.append_log("服务器运行目录已清理", task_id=state.job_id or task_key, status="已清理")
         if self.selected_task_key == task_key:
             self.window.render_result(
                 state,
                 Path(bundle["segmentation_path"]),
                 [Path(item) for item in bundle.get("skeleton_paths", [])],
             )
-            self.window.append_log("结果已加载", task_id=state.job_id, status="完成")
+            self.window.append_log(f"结果已保存到 {bundle['output_dir']}", task_id=state.job_id, status="完成")
 
     def handle_task_selection(self, task_key: str | None) -> None:
         self.selected_task_key = task_key
@@ -391,8 +425,10 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
             self.window.preview_file(preview_target)
             return
         if state.result is not None:
-            segmentation_path = self.cache_dir / task_key / "segmentation_pred.ply"
-            skeleton_paths = sorted((self.cache_dir / task_key).glob("skeleton_*.ply"))
+            output_job_id = state.job_id or task_key
+            output_artifacts_dir = self.output_dir / output_job_id / "artifacts"
+            segmentation_path = output_artifacts_dir / "segmentation_pred.ply"
+            skeleton_paths = sorted(output_artifacts_dir.glob("skeleton_*.ply"))
             self.window.render_result(
                 state,
                 segmentation_path if segmentation_path.exists() else None,
@@ -413,6 +449,15 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
             return
         target_path = self.window.prompt_save_path(artifact_name)
         if target_path is None:
+            return
+        local_artifact = self.output_dir / state.job_id / "artifacts" / artifact_name
+        if local_artifact.exists():
+            try:
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(local_artifact, target_path)
+                self.window.show_info("导出成功", f"已保存到 {target_path}")
+            except Exception as exc:
+                self.window.show_error("导出失败", str(exc))
             return
         start_background_task(
             self.thread_pool,

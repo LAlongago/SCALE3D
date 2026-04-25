@@ -34,6 +34,8 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
         self.show_skeleton = True
         self.point_size = 4
         self.skeleton_point_size = 7
+        self.display_rgb_name = "_scale3d_display_rgb"
+        self.base_point_rgb = None
         self._image_pixmap = None
         self.length_map: dict[int, float | None] = {}
         self.part_names: dict[int, str] = {}
@@ -65,12 +67,7 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
             self.plotter = QtInteractor(self)
             self.plotter.set_background("#1e1e1e")
             self._reset_plotter_scene()
-            self.plotter.enable_point_picking(
-                callback=self._handle_picked_point,
-                show_message=False,
-                use_picker=False,
-                left_clicking=True,
-            )
+            self._enable_point_picking()
             self.stack.addWidget(self.plotter.interactor)
 
         self.stack.setCurrentWidget(self.placeholder)
@@ -80,6 +77,7 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
         self.main_cloud_actor = None
         self.highlight_actor = None
         self.skeleton_actors = []
+        self.base_point_rgb = None
         self._image_pixmap = None
         if self.plotter is not None:
             self._reset_plotter_scene()
@@ -120,7 +118,12 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
         self.plotter.show_grid(color="#4a4a4a")
         self.plotter.add_axes(line_width=2, labels_off=True)
         self.mesh = pv.read(str(path))
-        self.main_cloud_actor = self.plotter.add_mesh(self.mesh, **self._build_point_cloud_render_kwargs())
+        self.base_point_rgb = None
+        self.main_cloud_actor = self.plotter.add_mesh(
+            self.mesh,
+            pickable=True,
+            **self._build_point_cloud_render_kwargs(),
+        )
         self.skeleton_actors = []
         self._apply_visibility()
         self.plotter.reset_camera()
@@ -142,6 +145,7 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
                 point_size=self.skeleton_point_size,
                 render_points_as_spheres=True,
                 name=f"skeleton_{index}",
+                pickable=False,
             )
             self.skeleton_actors.append(actor)
         self._apply_visibility()
@@ -173,12 +177,13 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
         if label_name is None:
             return
 
-        labels = np.asarray(self.mesh.point_data[label_name])
+        labels = np.asarray(self.mesh.point_data[label_name]).reshape(-1)
         mask = labels == part_id
         if self.highlight_actor is not None:
             self.plotter.remove_actor(self.highlight_actor, render=False)
             self.highlight_actor = None
 
+        self._recolor_selected_part(mask)
         if mask.any():
             highlighted = pv.PolyData(np.asarray(self.mesh.points)[mask])
             self.highlight_actor = self.plotter.add_mesh(
@@ -191,19 +196,35 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
             )
         self.plotter.render()
 
+    def _recolor_selected_part(self, mask) -> None:
+        if self.mesh is None or np is None or self.base_point_rgb is None:
+            return
+        colors = np.asarray(self.base_point_rgb).copy()
+        if len(colors) != len(mask):
+            return
+        colors[~mask] = np.clip(colors[~mask].astype(np.float32) * 0.32, 0, 255).astype(np.uint8)
+        colors[mask] = np.array([0, 229, 255], dtype=np.uint8)
+        self.mesh.point_data[self.display_rgb_name] = colors
+        if hasattr(self.mesh, "GetPointData"):
+            self.mesh.GetPointData().Modified()
+        if hasattr(self.mesh, "Modified"):
+            self.mesh.Modified()
+
     def _handle_picked_point(self, point, *_args) -> None:
         if self.mesh is None or pv is None:
             return
         if point is None:
             return
-        if hasattr(point, "GetPickPosition"):
-            point = point.GetPickPosition()
         label_name = self._find_label_array_name()
         if label_name is None:
             return
 
-        point_id = int(self.mesh.find_closest_point(point))
-        label_array = self.mesh.point_data[label_name]
+        point_id = self._picked_point_id(point)
+        if point_id is None:
+            return
+        label_array = np.asarray(self.mesh.point_data[label_name]).reshape(-1) if np is not None else self.mesh.point_data[label_name]
+        if point_id < 0 or point_id >= len(label_array):
+            return
         part_id = int(label_array[point_id])
         self.highlight_part(part_id)
         part_name = self.part_names.get(part_id, f"part_{part_id:02d}")
@@ -213,6 +234,39 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
                 self.on_part_selected(part_id, part_name)
             else:
                 self.on_part_selected(part_id, f"{part_name} | 长度={length:.2f} cm")
+
+    def _enable_point_picking(self) -> None:
+        if self.plotter is None:
+            return
+        try:
+            self.plotter.enable_point_picking(
+                callback=self._handle_picked_point,
+                show_message=False,
+                use_picker=True,
+                picker="point",
+                left_clicking=True,
+            )
+        except TypeError:
+            self.plotter.enable_point_picking(
+                callback=self._handle_picked_point,
+                show_message=False,
+                use_picker=True,
+                left_clicking=True,
+            )
+
+    def _picked_point_id(self, picked) -> int | None:
+        if self.mesh is None:
+            return None
+        if hasattr(picked, "GetPointId"):
+            point_id = int(picked.GetPointId())
+            if point_id >= 0:
+                return point_id
+            picked = picked.GetPickPosition()
+        if hasattr(picked, "GetPickPosition"):
+            picked = picked.GetPickPosition()
+        if picked is None:
+            return None
+        return int(self.mesh.find_closest_point(picked))
 
     def _refresh_image_pixmap(self) -> None:
         if self._image_pixmap is None or self._image_pixmap.isNull():
@@ -238,18 +292,27 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
         point_data = self.mesh.point_data
         label_name = self._find_label_array_name()
         if label_name is not None:
-            kwargs["scalars"] = self._build_label_rgb(point_data[label_name])
+            self.base_point_rgb = self._build_label_rgb(point_data[label_name])
+            self.mesh.point_data[self.display_rgb_name] = self.base_point_rgb
+            kwargs["scalars"] = self.display_rgb_name
             kwargs["rgb"] = True
             return kwargs
 
         rgb_array_name = self._find_rgb_array_name()
         if rgb_array_name is not None:
-            kwargs["scalars"] = rgb_array_name
+            self.base_point_rgb = np.asarray(point_data[rgb_array_name], dtype=np.uint8)[:, :3] if np is not None else None
+            if self.base_point_rgb is not None:
+                self.mesh.point_data[self.display_rgb_name] = self.base_point_rgb
+                kwargs["scalars"] = self.display_rgb_name
+            else:
+                kwargs["scalars"] = rgb_array_name
             kwargs["rgb"] = True
             return kwargs
 
         if self._has_rgb_components():
-            kwargs["scalars"] = self._build_rgb_components()
+            self.base_point_rgb = self._build_rgb_components()
+            self.mesh.point_data[self.display_rgb_name] = self.base_point_rgb
+            kwargs["scalars"] = self.display_rgb_name
             kwargs["rgb"] = True
             return kwargs
 
