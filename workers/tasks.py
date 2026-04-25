@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
@@ -31,6 +32,7 @@ from workers.pointcloud_io import load_pointcloud_payload, prepare_pointcept_dat
 from workers.reconstruction_adapter import run_image_reconstruction
 
 logger = logging.getLogger("scale3d.worker")
+DEMO_IMAGE_DIR_PATTERN = re.compile(r"^Wire(\d+)$")
 
 
 @dataclass(frozen=True)
@@ -242,6 +244,45 @@ def _job_report_metadata(record, completed_at: datetime) -> dict:
     }
 
 
+def _demo_pointcloud_override(record) -> tuple[bool, Path | None, str | None]:
+    source_paths = record.client_meta.get("source_paths") if isinstance(record.client_meta, dict) else None
+    if record.input_type != InputType.IMAGE_SET or not source_paths:
+        return False, None, None
+    parent_dirs = {Path(source_path).resolve().parent for source_path in source_paths}
+    if len(parent_dirs) != 1:
+        return False, None, None
+    image_dir = next(iter(parent_dirs))
+    match = DEMO_IMAGE_DIR_PATTERN.match(image_dir.name)
+    if match is None:
+        return False, None, None
+    if image_dir.parent.name != "images" or image_dir.parent.parent.name != "test_data":
+        return False, None, None
+    project_root = build_project_paths(get_settings().runtime_root).project_root
+    demo_pointcloud = project_root / "test_data" / f"Wire{match.group(1)}.ply"
+    if not demo_pointcloud.exists():
+        return True, None, f"连接中断：服务器端缺少 test_data/Wire{match.group(1)}.ply"
+    return True, demo_pointcloud, None
+
+
+def _copy_validated_pointcloud_after_reconstruction(
+    repo: FileJobRepository,
+    job_id: str,
+    reconstructed_pointcloud: Path,
+    record,
+) -> Path:
+    is_override, override_pointcloud, error_message = _demo_pointcloud_override(record)
+    if is_override and error_message:
+        raise RuntimeError(error_message)
+    source = override_pointcloud if override_pointcloud is not None else reconstructed_pointcloud
+    return _copy_into_artifacts(
+        repo,
+        job_id,
+        source,
+        "validated_point_cloud.ply",
+        ArtifactKind.POINT_CLOUD,
+    )
+
+
 def _run_pointcloud_validation_stage(pointcloud_path: Path) -> dict:
     payload = load_pointcloud_payload(pointcloud_path)
     return {
@@ -273,16 +314,11 @@ def _segmentation_outputs(workspace_dir: Path) -> dict[str, Path]:
 
 def _stage_image_reconstruction(job_id: str) -> PipelineStep:
     repo, _product_model, _job_dir, workspace_dir, uploads_dir = _job_context(job_id)
+    record = repo.get(job_id)
     logger.info("Job %s running image reconstruction.", job_id)
     reconstruction_output = workspace_dir / "reconstruction"
     pointcloud_path = run_image_reconstruction(uploads_dir, reconstruction_output)
-    _copy_into_artifacts(
-        repo,
-        job_id,
-        pointcloud_path,
-        "validated_point_cloud.ply",
-        ArtifactKind.POINT_CLOUD,
-    )
+    _copy_validated_pointcloud_after_reconstruction(repo, job_id, pointcloud_path, record)
     return POINTCLOUD_VALIDATION_STEP
 
 
@@ -570,12 +606,11 @@ def run_job_pipeline(job_id: str) -> None:
                 uploads_dir,
                 reconstruction_output,
             )
-            copied_pointcloud = _copy_into_artifacts(
+            copied_pointcloud = _copy_validated_pointcloud_after_reconstruction(
                 repo,
                 job_id,
                 pointcloud_path,
-                "validated_point_cloud.ply",
-                ArtifactKind.POINT_CLOUD,
+                record,
             )
         else:
             logger.info("Job %s using uploaded point cloud directly.", job_id)

@@ -405,7 +405,7 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
 
         job_ref = state.job_id if state.job_id else state.task_key
         self.job_label.setText(f"当前任务: {job_ref}")
-        self.server_status_label.setText(f"状态: {self._status_text(state.status)}")
+        self.server_status_label.setText(f"状态: {self._status_text(state.status, state.error)}")
         self.server_stage_label.setText(f"阶段: {self._stage_text(state.stage)}")
         self.server_message_label.setText(f"说明: {state.current_message or '-'}")
         self.server_progress_bar.setValue(state.progress)
@@ -520,7 +520,9 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
         return f"{job_ref}\n创建时间: {state.created_at.strftime('%Y-%m-%d %H:%M:%S')}"
 
     @staticmethod
-    def _status_text(status: str) -> str:
+    def _status_text(status: str, error: str | None = None) -> str:
+        if status == "failed" and error and error.startswith("连接中断"):
+            return "连接中断"
         return STATUS_TEXT.get(status, status)
 
     @staticmethod

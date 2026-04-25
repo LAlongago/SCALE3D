@@ -296,6 +296,7 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         current_signature = (state.status, state.stage, state.progress, state.current_message)
         should_log_progress = (
             self.selected_task_key == task_key
+            and state.status != "succeeded"
             and current_signature != previous_signature
             and current_signature != state.last_log_signature
         )
@@ -317,7 +318,7 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         if state.job_id is None:
             return
         state.result_loading = True
-        self.window.append_log("开始加载任务结果", task_id=state.job_id, status=self._status_text(state.status))
+        self.window.append_log("开始加载任务结果", task_id=state.job_id, status="结果加载中")
 
         def _run(progress_emit):
             job_status = self.api.get_job(state.job_id)
@@ -404,7 +405,7 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         state.transfer.progress_percent = 100
         self.window.upsert_job(state)
         self._update_queue_count()
-        self.window.append_log("结果加载完成", task_id=state.job_id or task_key, status=self._status_text(state.status))
+        self.window.append_log("结果加载完成", task_id=state.job_id or task_key, status="结果已加载")
         if bundle.get("server_cleanup_error"):
             self.window.append_log(
                 f"服务器运行目录清理失败: {bundle['server_cleanup_error']}",
@@ -413,13 +414,13 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
             )
         else:
             self.window.append_log("服务器运行目录已清理", task_id=state.job_id or task_key, status="已清理")
+        self.window.append_log(f"结果已保存到 {bundle['output_dir']}", task_id=state.job_id, status="已完成")
         if self.selected_task_key == task_key:
             self.window.render_result(
                 state,
                 Path(bundle["segmentation_path"]),
                 [Path(item) for item in bundle.get("skeleton_paths", [])],
             )
-            self.window.append_log(f"结果已保存到 {bundle['output_dir']}", task_id=state.job_id, status="完成")
 
     def handle_task_selection(self, task_key: str | None) -> None:
         self.selected_task_key = task_key
