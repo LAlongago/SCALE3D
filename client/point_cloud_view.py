@@ -32,6 +32,8 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
         self.skeleton_actors = []
         self.show_object_cloud = True
         self.show_skeleton = True
+        self.point_size = 4
+        self.skeleton_point_size = 7
         self._image_pixmap = None
         self.length_map: dict[int, float | None] = {}
         self.part_names: dict[int, str] = {}
@@ -138,7 +140,7 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
             actor = self.plotter.add_mesh(
                 mesh,
                 color="#facc15",
-                point_size=7,
+                point_size=self.skeleton_point_size,
                 render_points_as_spheres=True,
                 name=f"skeleton_{index}",
             )
@@ -153,13 +155,26 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
         self.show_skeleton = visible
         self._apply_visibility()
 
+    def set_point_size(self, point_size: int) -> None:
+        self.point_size = point_size
+        self.skeleton_point_size = max(point_size + 3, 5)
+        if self.main_cloud_actor is not None:
+            self.main_cloud_actor.GetProperty().SetPointSize(self.point_size)
+        for actor in self.skeleton_actors:
+            actor.GetProperty().SetPointSize(self.skeleton_point_size)
+        if self.highlight_actor is not None:
+            self.highlight_actor.GetProperty().SetPointSize(max(point_size + 4, 6))
+        if self.plotter is not None:
+            self.plotter.render()
+
     def highlight_part(self, part_id: int) -> None:
         if self.plotter is None or self.mesh is None:
             return
-        if "pred_label" not in self.mesh.point_data:
+        label_name = self._find_label_array_name()
+        if label_name is None:
             return
 
-        mask = self.mesh.point_data["pred_label"] == part_id
+        mask = self.mesh.point_data[label_name] == part_id
         if self.highlight_actor is not None:
             self.plotter.remove_actor(self.highlight_actor, render=False)
             self.highlight_actor = None
@@ -169,7 +184,7 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
             self.highlight_actor = self.plotter.add_mesh(
                 highlighted,
                 color="#00e5ff",
-                point_size=8,
+                point_size=max(self.point_size + 4, 6),
                 render_points_as_spheres=True,
                 name="highlight",
             )
@@ -181,10 +196,11 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
         if point is None:
             return
         point_id = int(self.mesh.find_closest_point(point))
-        label_array = self.mesh.point_data.get("pred_label")
-        if label_array is None:
+        label_name = self._find_label_array_name()
+        if label_name is None:
             return
 
+        label_array = self.mesh.point_data[label_name]
         part_id = int(label_array[point_id])
         self.highlight_part(part_id)
         part_name = self.part_names.get(part_id, f"part_{part_id:02d}")
@@ -209,7 +225,7 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
     def _build_point_cloud_render_kwargs(self) -> dict:
         kwargs = {
             "render_points_as_spheres": True,
-            "point_size": 4,
+            "point_size": self.point_size,
             "ambient": 0.2,
             "name": "main_cloud",
         }
@@ -217,8 +233,10 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
             return kwargs
 
         point_data = self.mesh.point_data
-        if "pred_label" in point_data:
-            kwargs["scalars"] = "pred_label"
+        label_name = self._find_label_array_name()
+        if label_name is not None:
+            kwargs["scalars"] = self._build_label_rgb(point_data[label_name])
+            kwargs["rgb"] = True
             return kwargs
 
         rgb_array_name = self._find_rgb_array_name()
@@ -243,7 +261,10 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
         preferred_names = (
             "rgb",
             "rgba",
+            "RGB",
+            "RGBA",
             "colors",
+            "Colors",
             "colour",
             "diffuse_colors",
         )
@@ -251,6 +272,22 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
             if name in point_data and self._is_rgb_array(point_data[name]):
                 return name
 
+        for name in point_data.keys():
+            normalized = name.lower()
+            if ("rgb" in normalized or "color" in normalized or "colour" in normalized) and self._is_rgb_array(point_data[name]):
+                return name
+        return None
+
+    def _find_label_array_name(self) -> str | None:
+        if self.mesh is None:
+            return None
+        point_data = self.mesh.point_data
+        preferred_names = ("pred_label", "label", "segment", "segmentation")
+        lookup = {name.lower(): name for name in point_data.keys()}
+        for name in preferred_names:
+            actual = lookup.get(name)
+            if actual is not None:
+                return actual
         return None
 
     def _has_rgb_components(self) -> bool:
@@ -269,6 +306,26 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
         green = channel_map["green"]
         blue = channel_map["blue"]
         return np.column_stack((red, green, blue))
+
+    def _build_label_rgb(self, labels):
+        if np is None:
+            return labels
+        palette = np.array(
+            [
+                [230, 25, 75], [60, 180, 75], [255, 225, 25], [0, 130, 200],
+                [245, 130, 48], [145, 30, 180], [70, 240, 240], [240, 50, 230],
+                [210, 245, 60], [250, 190, 190], [0, 128, 128], [230, 190, 255],
+                [170, 110, 40], [255, 250, 200], [128, 0, 0], [170, 255, 195],
+                [128, 128, 0], [255, 215, 180], [0, 0, 128], [128, 128, 128],
+                [255, 99, 71], [154, 205, 50], [30, 144, 255], [255, 140, 0],
+                [186, 85, 211], [0, 206, 209], [255, 20, 147], [124, 252, 0],
+                [255, 182, 193], [32, 178, 170], [221, 160, 221], [160, 82, 45],
+                [255, 239, 213], [139, 0, 0], [127, 255, 212], [85, 107, 47],
+            ],
+            dtype=np.uint8,
+        )
+        label_array = np.asarray(labels, dtype=np.int64)
+        return palette[np.mod(label_array, len(palette))]
 
     @staticmethod
     def _is_rgb_array(array) -> bool:

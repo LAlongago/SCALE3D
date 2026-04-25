@@ -12,7 +12,6 @@ try:  # pragma: no cover - UI widgets are not unit-tested
     from PySide6.QtGui import QAction, QFont
     from PySide6.QtWidgets import (
         QComboBox,
-        QCheckBox,
         QFileDialog,
         QGridLayout,
         QGroupBox,
@@ -153,10 +152,26 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
         view_menu = self.menuBar().addMenu("查看")
         refresh_action = QAction("刷新任务状态", self)
         show_selected_action = QAction("查看选中任务", self)
+        self.show_object_cloud_action = QAction("显示物体点云", self)
+        self.show_object_cloud_action.setCheckable(True)
+        self.show_object_cloud_action.setChecked(True)
+        self.show_skeleton_action = QAction("显示骨架", self)
+        self.show_skeleton_action.setCheckable(True)
+        self.show_skeleton_action.setChecked(True)
         refresh_action.triggered.connect(self.refresh_requested.emit)
         show_selected_action.triggered.connect(lambda: self.task_selected.emit(self.current_task_key()))
+        self.show_object_cloud_action.toggled.connect(self._toggle_object_cloud)
+        self.show_skeleton_action.toggled.connect(self._toggle_skeleton)
         view_menu.addAction(refresh_action)
         view_menu.addAction(show_selected_action)
+        view_menu.addSeparator()
+        view_menu.addAction(self.show_object_cloud_action)
+        view_menu.addAction(self.show_skeleton_action)
+        point_size_menu = view_menu.addMenu("点大小")
+        for label, size in (("小", 2), ("中", 4), ("大", 7), ("超大", 10)):
+            action = QAction(label, self)
+            action.triggered.connect(lambda _checked=False, value=size: self.point_cloud_view.set_point_size(value))
+            point_size_menu.addAction(action)
 
     def _build_status_bar(self) -> None:
         self.status_transfer_label = QLabel("传输: - | 进度: -")
@@ -224,18 +239,6 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
         font.setPointSize(11)
         view_label.setFont(font)
         center_layout.addWidget(view_label)
-
-        view_options = QHBoxLayout()
-        self.show_object_cloud_checkbox = QCheckBox("显示物体点云")
-        self.show_skeleton_checkbox = QCheckBox("显示骨架")
-        self.show_object_cloud_checkbox.setChecked(True)
-        self.show_skeleton_checkbox.setChecked(True)
-        self.show_object_cloud_checkbox.toggled.connect(self._toggle_object_cloud)
-        self.show_skeleton_checkbox.toggled.connect(self._toggle_skeleton)
-        view_options.addWidget(self.show_object_cloud_checkbox)
-        view_options.addWidget(self.show_skeleton_checkbox)
-        view_options.addStretch(1)
-        center_layout.addLayout(view_options)
 
         self.point_cloud_view = PointCloudView(on_part_selected=self._emit_point_cloud_pick)
         center_layout.addWidget(self.point_cloud_view, 1)
