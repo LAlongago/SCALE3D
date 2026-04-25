@@ -5,6 +5,7 @@ import logging
 import shutil
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
@@ -227,6 +228,20 @@ def _length_calibration_payload(length_rows: list[LengthPartResult]) -> dict:
     }
 
 
+def _job_report_metadata(record, completed_at: datetime) -> dict:
+    source_paths = record.client_meta.get("source_paths") if isinstance(record.client_meta, dict) else None
+    if not source_paths:
+        source_paths = record.uploads
+    return {
+        "job_id": record.job_id,
+        "input_type": record.input_type.value,
+        "source_paths": source_paths,
+        "uploads": record.uploads,
+        "created_at": record.created_at.isoformat(),
+        "completed_at": completed_at.isoformat(),
+    }
+
+
 def _run_pointcloud_validation_stage(pointcloud_path: Path) -> dict:
     payload = load_pointcloud_payload(pointcloud_path)
     return {
@@ -400,6 +415,7 @@ def _stage_skeletonization_and_length(job_id: str) -> PipelineStep:
 
 def _stage_report_generation(job_id: str) -> None:
     repo, product_model, _job_dir, workspace_dir, _uploads_dir = _job_context(job_id)
+    record = repo.get(job_id)
     logger.info("Job %s generating inspection report.", job_id)
     segmentation_output = _segmentation_outputs(workspace_dir)
     raw_segmentation_rows = json.loads(
@@ -418,6 +434,8 @@ def _stage_report_generation(job_id: str) -> None:
     )
     warnings = list(segmentation_summary.notes)
     inspection_summary = build_inspection_summary(product_model, warnings)
+    completed_at = datetime.utcnow()
+    job_metadata = _job_report_metadata(record, completed_at)
     result = JobResultPayload(
         segmentation=segmentation_rows,
         lengths=length_rows,
@@ -437,10 +455,11 @@ def _stage_report_generation(job_id: str) -> None:
         raw_outputs={
             "pointcloud_validation": pointcloud_validation,
             "length_calibration": _length_calibration_payload(length_rows),
+            "job_metadata": job_metadata,
         },
     )
     reports_dir = workspace_dir / "reports"
-    pdf_path, json_path = render_report_bundle(reports_dir, product_model, result)
+    pdf_path, json_path = render_report_bundle(reports_dir, product_model, result, job_metadata)
     _copy_into_artifacts(
         repo,
         job_id,
@@ -717,6 +736,8 @@ def run_job_pipeline(job_id: str) -> None:
         logger.info("Job %s generating inspection report.", job_id)
         warnings = list(segmentation_summary.notes)
         inspection_summary = build_inspection_summary(product_model, warnings)
+        completed_at = datetime.utcnow()
+        job_metadata = _job_report_metadata(record, completed_at)
         result = JobResultPayload(
             segmentation=segmentation_rows,
             lengths=length_rows,
@@ -736,10 +757,11 @@ def run_job_pipeline(job_id: str) -> None:
             raw_outputs={
                 "pointcloud_validation": pointcloud_validation,
                 "length_calibration": _length_calibration_payload(length_rows),
+                "job_metadata": job_metadata,
             },
         )
         reports_dir = workspace_dir / "reports"
-        pdf_path, json_path = render_report_bundle(reports_dir, product_model, result)
+        pdf_path, json_path = render_report_bundle(reports_dir, product_model, result, job_metadata)
         pdf_artifact = _copy_into_artifacts(
             repo,
             job_id,

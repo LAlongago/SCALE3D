@@ -61,7 +61,6 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
     task_selected = Signal(object)
     export_requested = Signal(str)
     part_row_selected = Signal(int)
-    point_cloud_part_picked = Signal(int, str)
     file_selection_changed = Signal(object)
 
     def __init__(self) -> None:
@@ -260,7 +259,7 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
         view_label.setFont(font)
         center_layout.addWidget(view_label)
 
-        self.point_cloud_view = PointCloudView(on_part_selected=self._emit_point_cloud_pick)
+        self.point_cloud_view = PointCloudView()
         center_layout.addWidget(self.point_cloud_view, 1)
 
         right_panel = QWidget()
@@ -509,9 +508,6 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
         selected = self.parts_table.selectedItems()
         if selected:
             self.part_row_selected.emit(selected[0].row())
-
-    def _emit_point_cloud_pick(self, part_id: int, text: str) -> None:
-        self.point_cloud_part_picked.emit(part_id, text)
 
     def _toggle_object_cloud(self, checked: bool) -> None:
         self.point_cloud_view.set_object_cloud_visible(checked)

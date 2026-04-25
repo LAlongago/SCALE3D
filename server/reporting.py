@@ -46,6 +46,7 @@ def render_report_bundle(
     output_dir: Path,
     product_model: ProductModelDefinition,
     result: JobResultPayload,
+    job_metadata: dict | None = None,
 ) -> tuple[Path, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_dir / "inspection_report.json"
@@ -56,6 +57,7 @@ def render_report_bundle(
         None,
     )
     payload = {
+        "任务信息": job_metadata or {},
         "产品型号ID": product_model.product_model_id,
         "产品型号名称": product_model.display_name,
         "长度单位": result.reports.inspection_summary.length_unit,
@@ -80,6 +82,11 @@ def render_report_bundle(
         styles[style_name].fontName = chinese_font
     story = [
         Paragraph("SCALE3D 产品检测报告", styles["Title"]),
+        Spacer(1, 12),
+        Paragraph("任务信息", styles["Heading2"]),
+        Paragraph(f"数据来源：{_format_source_paths(job_metadata)}", styles["BodyText"]),
+        Paragraph(f"任务创建时间：{_metadata_value(job_metadata, 'created_at')}", styles["BodyText"]),
+        Paragraph(f"任务完成时间：{_metadata_value(job_metadata, 'completed_at')}", styles["BodyText"]),
         Spacer(1, 12),
         Paragraph(f"产品型号：{product_model.display_name}", styles["Heading2"]),
         Paragraph(
@@ -147,6 +154,24 @@ def render_report_bundle(
     story.append(table)
     doc.build(story)
     return pdf_path, json_path
+
+
+def _metadata_value(job_metadata: dict | None, key: str) -> str:
+    if not job_metadata:
+        return "-"
+    value = job_metadata.get(key)
+    return "-" if value in (None, "") else str(value)
+
+
+def _format_source_paths(job_metadata: dict | None) -> str:
+    if not job_metadata:
+        return "-"
+    source_paths = job_metadata.get("source_paths") or job_metadata.get("uploads") or []
+    if isinstance(source_paths, str):
+        return source_paths
+    if not source_paths:
+        return "-"
+    return "<br/>".join(str(item) for item in source_paths)
 
 
 def build_inspection_summary(

@@ -64,7 +64,6 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         self.window.task_selected.connect(self.handle_task_selection)
         self.window.export_requested.connect(self.export_artifact)
         self.window.part_row_selected.connect(self.handle_part_row_selected)
-        self.window.point_cloud_part_picked.connect(self.handle_point_cloud_part_picked)
 
         self.window.append_log("客户端已连接到服务器", status=self.api.base_url)
         self.load_product_models()
@@ -182,7 +181,10 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
                 product_model_id,
                 input_type,
                 file_paths,
-                {"client": "desktop-client"},
+                {
+                    "client": "desktop-client",
+                    "source_paths": [str(path.resolve()) for path in file_paths],
+                },
                 progress_callback=progress_emit,
             )
 
@@ -318,6 +320,7 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         self.window.append_log("开始加载任务结果", task_id=state.job_id, status=self._status_text(state.status))
 
         def _run(progress_emit):
+            job_status = self.api.get_job(state.job_id)
             result = self.api.get_result(state.job_id)
             artifacts = self.api.list_artifacts(state.job_id)
             task_output_dir = self.output_dir / state.job_id
@@ -325,6 +328,10 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
             artifacts_output_dir.mkdir(parents=True, exist_ok=True)
             (task_output_dir / "result.json").write_text(
                 json.dumps(result, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            (task_output_dir / "job.json").write_text(
+                json.dumps(job_status, indent=2, ensure_ascii=False),
                 encoding="utf-8",
             )
             (task_output_dir / "artifacts.json").write_text(
@@ -435,9 +442,28 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
                 skeleton_paths,
             )
         elif state.status == "succeeded" and not state.result_loading:
-            self._load_result(task_key)
+            if not self._load_local_result_if_available(state):
+                self._load_result(task_key)
         else:
             self.window.clear_result()
+
+    def _load_local_result_if_available(self, state: JobViewState) -> bool:
+        if state.job_id is None:
+            return False
+        task_output_dir = self.output_dir / state.job_id
+        result_path = task_output_dir / "result.json"
+        segmentation_path = task_output_dir / "artifacts" / "segmentation_pred.ply"
+        if not result_path.exists() or not segmentation_path.exists():
+            return False
+        try:
+            state.result = json.loads(result_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            self.window.append_log(f"本地结果读取失败: {exc}", task_id=state.job_id, status="读取失败")
+            return False
+        skeleton_paths = sorted((task_output_dir / "artifacts").glob("skeleton_*.ply"))
+        self.window.upsert_job(state)
+        self.window.render_result(state, segmentation_path, skeleton_paths)
+        return True
 
     def export_artifact(self, artifact_name: str) -> None:
         if not self.selected_task_key:
@@ -481,11 +507,6 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         part = state.result["segmentation"][row]
         self.window.highlight_part(part["part_id"])
         self.window.append_log(part["part_name"], task_id=state.job_id, status="选中部件")
-
-    def handle_point_cloud_part_picked(self, part_id: int, text: str) -> None:
-        if self.selected_task_key:
-            state = self.job_states.get(self.selected_task_key)
-            self.window.append_log(text, task_id=None if state is None else state.job_id, status=f"点选部件 {part_id}")
 
     def _update_queue_count(self) -> None:
         count = sum(1 for state in self.job_states.values() if not state.is_terminal)

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable
-
 try:
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QPixmap
@@ -23,12 +21,10 @@ except ImportError:  # pragma: no cover
 
 
 class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tested
-    def __init__(self, on_part_selected: Callable[[int, str], None] | None = None, parent=None) -> None:
+    def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.on_part_selected = on_part_selected
         self.mesh = None
         self.main_cloud_actor = None
-        self.highlight_actor = None
         self.skeleton_actors = []
         self.show_object_cloud = True
         self.show_skeleton = True
@@ -67,7 +63,6 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
             self.plotter = QtInteractor(self)
             self.plotter.set_background("#1e1e1e")
             self._reset_plotter_scene()
-            self._enable_point_picking()
             self.stack.addWidget(self.plotter.interactor)
 
         self.stack.setCurrentWidget(self.placeholder)
@@ -75,7 +70,6 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
     def clear_view(self) -> None:
         self.mesh = None
         self.main_cloud_actor = None
-        self.highlight_actor = None
         self.skeleton_actors = []
         self.base_point_rgb = None
         self._image_pixmap = None
@@ -165,108 +159,11 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
             self.main_cloud_actor.GetProperty().SetPointSize(self.point_size)
         for actor in self.skeleton_actors:
             actor.GetProperty().SetPointSize(self.skeleton_point_size)
-        if self.highlight_actor is not None:
-            self.highlight_actor.GetProperty().SetPointSize(max(point_size + 4, 6))
         if self.plotter is not None:
             self.plotter.render()
 
     def highlight_part(self, part_id: int) -> None:
-        if self.plotter is None or self.mesh is None or pv is None or np is None:
-            return
-        label_name = self._find_label_array_name()
-        if label_name is None:
-            return
-
-        labels = np.asarray(self.mesh.point_data[label_name]).reshape(-1)
-        mask = labels == part_id
-        if self.highlight_actor is not None:
-            self.plotter.remove_actor(self.highlight_actor, render=False)
-            self.highlight_actor = None
-
-        self._recolor_selected_part(mask)
-        if mask.any():
-            highlighted = pv.PolyData(np.asarray(self.mesh.points)[mask])
-            self.highlight_actor = self.plotter.add_mesh(
-                highlighted,
-                color="#00e5ff",
-                point_size=max(self.point_size + 4, 6),
-                render_points_as_spheres=True,
-                name="highlight",
-                pickable=False,
-            )
-        self.plotter.render()
-
-    def _recolor_selected_part(self, mask) -> None:
-        if self.mesh is None or np is None or self.base_point_rgb is None:
-            return
-        colors = np.asarray(self.base_point_rgb).copy()
-        if len(colors) != len(mask):
-            return
-        colors[~mask] = np.clip(colors[~mask].astype(np.float32) * 0.32, 0, 255).astype(np.uint8)
-        colors[mask] = np.array([0, 229, 255], dtype=np.uint8)
-        self.mesh.point_data[self.display_rgb_name] = colors
-        if hasattr(self.mesh, "GetPointData"):
-            self.mesh.GetPointData().Modified()
-        if hasattr(self.mesh, "Modified"):
-            self.mesh.Modified()
-
-    def _handle_picked_point(self, point, *_args) -> None:
-        if self.mesh is None or pv is None:
-            return
-        if point is None:
-            return
-        label_name = self._find_label_array_name()
-        if label_name is None:
-            return
-
-        point_id = self._picked_point_id(point)
-        if point_id is None:
-            return
-        label_array = np.asarray(self.mesh.point_data[label_name]).reshape(-1) if np is not None else self.mesh.point_data[label_name]
-        if point_id < 0 or point_id >= len(label_array):
-            return
-        part_id = int(label_array[point_id])
-        self.highlight_part(part_id)
-        part_name = self.part_names.get(part_id, f"part_{part_id:02d}")
-        if self.on_part_selected is not None:
-            length = self.length_map.get(part_id)
-            if length is None:
-                self.on_part_selected(part_id, part_name)
-            else:
-                self.on_part_selected(part_id, f"{part_name} | 长度={length:.2f} cm")
-
-    def _enable_point_picking(self) -> None:
-        if self.plotter is None:
-            return
-        try:
-            self.plotter.enable_point_picking(
-                callback=self._handle_picked_point,
-                show_message=False,
-                use_picker=True,
-                picker="point",
-                left_clicking=True,
-            )
-        except TypeError:
-            self.plotter.enable_point_picking(
-                callback=self._handle_picked_point,
-                show_message=False,
-                use_picker=True,
-                left_clicking=True,
-            )
-
-    def _picked_point_id(self, picked) -> int | None:
-        if self.mesh is None:
-            return None
-        if hasattr(picked, "GetPointId"):
-            point_id = int(picked.GetPointId())
-            if point_id >= 0:
-                return point_id
-            picked = picked.GetPickPosition()
-        if hasattr(picked, "GetPickPosition"):
-            picked = picked.GetPickPosition()
-        if picked is None:
-            return None
-        return int(self.mesh.find_closest_point(picked))
+        return
 
     def _refresh_image_pixmap(self) -> None:
         if self._image_pixmap is None or self._image_pixmap.isNull():
@@ -398,7 +295,6 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
             return
         self.plotter.clear()
         self.main_cloud_actor = None
-        self.highlight_actor = None
         self.skeleton_actors = []
         self.plotter.show_grid(color="#4a4a4a")
         self.plotter.add_axes(line_width=2, labels_off=True)
