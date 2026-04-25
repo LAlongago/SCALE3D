@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 import logging
 import shutil
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
-from threading import Thread
+from typing import Callable
 
 from server.reporting import build_inspection_summary, render_report_bundle
 from server.repository import FileJobRepository
@@ -31,6 +32,15 @@ from workers.reconstruction_adapter import run_image_reconstruction
 logger = logging.getLogger("scale3d.worker")
 
 
+@dataclass(frozen=True)
+class PipelineStep:
+    stage: JobStage
+    progress: int
+    queue_name: str
+    message: str
+    handler: Callable[[str], "PipelineStep | None"]
+
+
 class LocalQueueDispatcher:
     def __init__(self) -> None:
         settings = get_settings()
@@ -50,11 +60,43 @@ class LocalQueueDispatcher:
         }
 
     def submit_pipeline(self, job_id: str) -> None:
-        Thread(target=run_job_pipeline, args=(job_id,), daemon=True).start()
+        repo = FileJobRepository()
+        record = repo.get(job_id)
+        repo.update_stage(job_id, JobStatus.QUEUED, JobStage.UPLOAD, 5, "Job queued for execution.")
+        logger.info("Job %s accepted into staged local pipeline.", job_id)
+        if record.input_type == InputType.IMAGE_SET:
+            self._submit_step(job_id, IMAGE_RECONSTRUCTION_STEP)
+        else:
+            self._submit_step(job_id, POINTCLOUD_VALIDATION_STEP)
 
     def run_stage(self, queue_name: str, fn, *args, **kwargs):
         future = self.executors[queue_name].submit(fn, *args, **kwargs)
         return future.result()
+
+    def _submit_step(self, job_id: str, step: PipelineStep) -> None:
+        repo = FileJobRepository()
+        repo.update_stage(
+            job_id,
+            JobStatus.RUNNING,
+            step.stage,
+            step.progress,
+            step.message,
+            queue_name=step.queue_name,
+        )
+        logger.info("Job %s submitted to %s for %s.", job_id, step.queue_name, step.stage.value)
+        future = self.executors[step.queue_name].submit(step.handler, job_id)
+        future.add_done_callback(lambda completed: self._on_step_done(job_id, step, completed))
+
+    def _on_step_done(self, job_id: str, step: PipelineStep, future: Future) -> None:
+        try:
+            next_step = future.result()
+        except Exception as exc:
+            _mark_job_failed(job_id, step.stage, exc)
+            return
+        if next_step is None:
+            logger.info("Job %s completed staged local pipeline.", job_id)
+            return
+        self._submit_step(job_id, next_step)
 
     def shutdown(self) -> None:
         for executor in self.executors.values():
@@ -125,6 +167,286 @@ def _run_pointcloud_validation_stage(pointcloud_path: Path) -> dict:
         "bbox_min": payload.bbox_min,
         "bbox_max": payload.bbox_max,
     }
+
+
+def _job_context(job_id: str) -> tuple[FileJobRepository, object, Path, Path, Path]:
+    repo = FileJobRepository()
+    record = repo.get(job_id)
+    product_model = get_product_model(record.product_model_id)
+    workspace_dir = repo.workspace_dir(job_id)
+    uploads_dir = repo.uploads_dir(job_id)
+    return repo, product_model, repo.job_dir(job_id), workspace_dir, uploads_dir
+
+
+def _validated_pointcloud_path(repo: FileJobRepository, job_id: str) -> Path:
+    return repo.artifacts_dir(job_id) / "validated_point_cloud.ply"
+
+
+def _segmentation_outputs(workspace_dir: Path) -> dict[str, Path]:
+    result_json = workspace_dir / "segmentation" / "pointcept_result_paths.json"
+    payload = json.loads(result_json.read_text(encoding="utf-8"))
+    return {key: Path(value) for key, value in payload.items()}
+
+
+def _stage_image_reconstruction(job_id: str) -> PipelineStep:
+    repo, _product_model, _job_dir, workspace_dir, uploads_dir = _job_context(job_id)
+    logger.info("Job %s running image reconstruction.", job_id)
+    reconstruction_output = workspace_dir / "reconstruction"
+    pointcloud_path = run_image_reconstruction(uploads_dir, reconstruction_output)
+    _copy_into_artifacts(
+        repo,
+        job_id,
+        pointcloud_path,
+        "validated_point_cloud.ply",
+        ArtifactKind.POINT_CLOUD,
+    )
+    return POINTCLOUD_VALIDATION_STEP
+
+
+def _stage_pointcloud_validation(job_id: str) -> PipelineStep:
+    repo, _product_model, _job_dir, workspace_dir, uploads_dir = _job_context(job_id)
+    record = repo.get(job_id)
+    copied_pointcloud = _validated_pointcloud_path(repo, job_id)
+    if record.input_type == InputType.POINT_CLOUD:
+        logger.info("Job %s using uploaded point cloud directly.", job_id)
+        original_pointcloud = next(iter(sorted(uploads_dir.glob("*.ply"))))
+        copied_pointcloud = _copy_into_artifacts(
+            repo,
+            job_id,
+            original_pointcloud,
+            "validated_point_cloud.ply",
+            ArtifactKind.POINT_CLOUD,
+        )
+    logger.info("Job %s validating point cloud.", job_id)
+    pointcloud_validation = _run_pointcloud_validation_stage(copied_pointcloud)
+    validation_json = workspace_dir / "pointcloud_validation.json"
+    validation_json.write_text(
+        json.dumps(pointcloud_validation, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    _copy_into_artifacts(repo, job_id, validation_json, "pointcloud_validation.json", ArtifactKind.INTERNAL)
+    return PART_SEGMENTATION_STEP
+
+
+def _stage_part_segmentation(job_id: str) -> PipelineStep:
+    repo, _product_model, _job_dir, workspace_dir, _uploads_dir = _job_context(job_id)
+    record = repo.get(job_id)
+    paths = build_project_paths(get_settings().runtime_root)
+    logger.info("Job %s running Pointcept segmentation.", job_id)
+    dataset_root = workspace_dir / "pointcept_dataset"
+    sample_name = job_id
+    copied_pointcloud = _validated_pointcloud_path(repo, job_id)
+    prepare_pointcept_dataset(sample_name, copied_pointcloud, dataset_root)
+    segmentation_output = run_pointcept_inference(
+        paths.ut_root,
+        record.product_model_id,
+        dataset_root,
+        sample_name,
+        workspace_dir / "segmentation",
+    )
+    _copy_into_artifacts(
+        repo,
+        job_id,
+        segmentation_output["pred_npy"],
+        "prediction.npy",
+        ArtifactKind.SEGMENTATION,
+    )
+    _copy_into_artifacts(
+        repo,
+        job_id,
+        segmentation_output["confidence_npy"],
+        "point_confidence.npy",
+        ArtifactKind.SEGMENTATION,
+    )
+    _copy_into_artifacts(
+        repo,
+        job_id,
+        segmentation_output["segmentation_ply"],
+        "segmentation_pred.ply",
+        ArtifactKind.SEGMENTATION,
+    )
+    return SEGMENTATION_REPORT_STEP
+
+
+def _stage_segmentation_report(job_id: str) -> PipelineStep:
+    repo, product_model, _job_dir, workspace_dir, _uploads_dir = _job_context(job_id)
+    logger.info("Job %s building segmentation report.", job_id)
+    segmentation_output = _segmentation_outputs(workspace_dir)
+    raw_segmentation_rows = json.loads(
+        segmentation_output["summary_json"].read_text(encoding="utf-8")
+    )
+    segmentation_rows = [
+        SegmentationPartResult.model_validate(item) for item in raw_segmentation_rows
+    ]
+    segmentation_summary = _build_segmentation_summary(product_model, segmentation_rows)
+    segmentation_summary_path = workspace_dir / "segmentation_summary.json"
+    segmentation_summary_path.write_text(
+        segmentation_summary.model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+    _copy_into_artifacts(
+        repo,
+        job_id,
+        segmentation_summary_path,
+        "segmentation_summary.json",
+        ArtifactKind.SEGMENTATION,
+    )
+    return SKELETONIZATION_AND_LENGTH_STEP
+
+
+def _stage_skeletonization_and_length(job_id: str) -> PipelineStep:
+    repo, _product_model, _job_dir, workspace_dir, _uploads_dir = _job_context(job_id)
+    paths = build_project_paths(get_settings().runtime_root)
+    segmentation_output = _segmentation_outputs(workspace_dir)
+    logger.info("Job %s running skeletonization and curve length analysis.", job_id)
+    geometry_outputs = run_skeleton_and_length(
+        paths.ut_root,
+        segmentation_output["coord_npy"],
+        segmentation_output["pred_npy"],
+        workspace_dir / "geometry",
+    )
+    _copy_into_artifacts(
+        repo,
+        job_id,
+        geometry_outputs["summary_json"],
+        "skeleton_summary.json",
+        ArtifactKind.GEOMETRY,
+    )
+    _copy_into_artifacts(
+        repo,
+        job_id,
+        geometry_outputs["curve_length_json"],
+        "curve_length_summary.json",
+        ArtifactKind.GEOMETRY,
+    )
+    _copy_into_artifacts(
+        repo,
+        job_id,
+        geometry_outputs["curve_length_csv"],
+        "curve_length_summary.csv",
+        ArtifactKind.GEOMETRY,
+    )
+    return REPORT_GENERATION_STEP
+
+
+def _stage_report_generation(job_id: str) -> None:
+    repo, product_model, _job_dir, workspace_dir, _uploads_dir = _job_context(job_id)
+    logger.info("Job %s generating inspection report.", job_id)
+    segmentation_output = _segmentation_outputs(workspace_dir)
+    raw_segmentation_rows = json.loads(
+        segmentation_output["summary_json"].read_text(encoding="utf-8")
+    )
+    segmentation_rows = [
+        SegmentationPartResult.model_validate(item) for item in raw_segmentation_rows
+    ]
+    segmentation_summary = SegmentationSummary.model_validate(
+        json.loads((workspace_dir / "segmentation_summary.json").read_text(encoding="utf-8"))
+    )
+    curve_length_map = parse_curve_length_summary(workspace_dir / "geometry" / "curve_length_summary.json")
+    length_rows = _build_length_rows(product_model, curve_length_map)
+    pointcloud_validation = json.loads(
+        (workspace_dir / "pointcloud_validation.json").read_text(encoding="utf-8")
+    )
+    warnings = list(segmentation_summary.notes)
+    inspection_summary = build_inspection_summary(product_model, warnings)
+    result = JobResultPayload(
+        segmentation=segmentation_rows,
+        lengths=length_rows,
+        reports=ReportsResult(
+            segmentation_summary=segmentation_summary,
+            inspection_summary=inspection_summary,
+        ),
+        visualization=VisualizationResult(
+            segmentation_ply="artifacts/segmentation_pred.ply",
+            point_confidence_npy="artifacts/point_confidence.npy",
+            pred_npy="artifacts/prediction.npy",
+            coord_npy=str(segmentation_output["coord_npy"].resolve()),
+            palette=PALETTE_36,
+            skeleton_summary_json="artifacts/skeleton_summary.json",
+            curve_length_summary_json="artifacts/curve_length_summary.json",
+        ),
+        raw_outputs={
+            "pointcloud_validation": pointcloud_validation,
+        },
+    )
+    reports_dir = workspace_dir / "reports"
+    pdf_path, json_path = render_report_bundle(reports_dir, product_model, result)
+    _copy_into_artifacts(
+        repo,
+        job_id,
+        pdf_path,
+        "inspection_report.pdf",
+        ArtifactKind.REPORT,
+    )
+    _copy_into_artifacts(
+        repo,
+        job_id,
+        json_path,
+        "inspection_report.json",
+        ArtifactKind.REPORT,
+    )
+    result.reports.pdf_path = "artifacts/inspection_report.pdf"
+    result.reports.json_path = "artifacts/inspection_report.json"
+    repo.set_result(job_id, result)
+    repo.mark_succeeded(job_id)
+    if get_settings().cleanup_workspace_on_success:
+        repo.cleanup_job_temp_resources(job_id)
+        logger.info("Job %s temporary resources cleaned after success.", job_id)
+    logger.info("Job %s completed successfully.", job_id)
+    return None
+
+
+def _mark_job_failed(job_id: str, stage: JobStage, exc: BaseException) -> None:
+    repo = FileJobRepository()
+    repo.mark_failed(job_id, stage, str(exc))
+    if get_settings().cleanup_workspace_on_failure:
+        repo.cleanup_job_temp_resources(job_id)
+        logger.info("Job %s temporary resources cleaned after failure.", job_id)
+    logger.exception("Job %s failed in %s: %s", job_id, stage.value, exc)
+
+
+IMAGE_RECONSTRUCTION_STEP = PipelineStep(
+    stage=JobStage.IMAGE_RECONSTRUCTION,
+    progress=15,
+    queue_name="reconstruction_gpu",
+    message="Running COLMAP and 3DGS reconstruction.",
+    handler=_stage_image_reconstruction,
+)
+POINTCLOUD_VALIDATION_STEP = PipelineStep(
+    stage=JobStage.POINTCLOUD_VALIDATION,
+    progress=30,
+    queue_name="geometry_cpu",
+    message="Validating uploaded point cloud and extracting metadata.",
+    handler=_stage_pointcloud_validation,
+)
+PART_SEGMENTATION_STEP = PipelineStep(
+    stage=JobStage.PART_SEGMENTATION,
+    progress=50,
+    queue_name="segmentation_gpu",
+    message="Preparing Pointcept inference sample and running segmentation.",
+    handler=_stage_part_segmentation,
+)
+SEGMENTATION_REPORT_STEP = PipelineStep(
+    stage=JobStage.SEGMENTATION_REPORT,
+    progress=65,
+    queue_name="geometry_cpu",
+    message="Aggregating part completeness and confidence report.",
+    handler=_stage_segmentation_report,
+)
+SKELETONIZATION_AND_LENGTH_STEP = PipelineStep(
+    stage=JobStage.SKELETONIZATION_AND_LENGTH,
+    progress=80,
+    queue_name="geometry_cpu",
+    message="Running pc-skeletor skeletonization and curve length analysis.",
+    handler=_stage_skeletonization_and_length,
+)
+REPORT_GENERATION_STEP = PipelineStep(
+    stage=JobStage.REPORT_GENERATION,
+    progress=95,
+    queue_name="geometry_cpu",
+    message="Rendering inspection report bundle.",
+    handler=_stage_report_generation,
+)
 
 
 def run_job_pipeline(job_id: str) -> None:

@@ -48,7 +48,7 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
     def __init__(self) -> None:
         super().__init__()
         self._task_items: dict[str, QListWidgetItem] = {}
-        self.setWindowTitle("UT 产品点云检测系统")
+        self.setWindowTitle("SCALE3D检测系统")
         self.resize(1600, 900)
         self._apply_stylesheet()
         self._build_ui()
