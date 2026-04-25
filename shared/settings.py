@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -19,6 +20,9 @@ class Settings:
     server_url: str
     colmap_command: str | None
     dgs_command: str | None
+    enable_3dgs_denoise: bool
+    denoise_3dgs_python: Path
+    denoise_3dgs_args: str
     pointcept_python: Path
     pc_skeletor_python: Path
     cleanup_workspace_on_success: bool
@@ -50,6 +54,11 @@ def get_settings() -> Settings:
         server_url=os.environ.get("PIS_SERVER_URL", "http://127.0.0.1:8000"),
         colmap_command=os.environ.get("PIS_COLMAP_COMMAND"),
         dgs_command=os.environ.get("PIS_3DGS_COMMAND"),
+        enable_3dgs_denoise=os.environ.get("PIS_ENABLE_3DGS_DENOISE", "1") == "1",
+        denoise_3dgs_python=Path(
+            os.environ.get("PIS_3DGS_DENOISE_PYTHON", sys.executable)
+        ).resolve(),
+        denoise_3dgs_args=os.environ.get("PIS_3DGS_DENOISE_ARGS", ""),
         pointcept_python=Path(
             os.environ.get(
                 "PIS_POINTCEPT_PYTHON",

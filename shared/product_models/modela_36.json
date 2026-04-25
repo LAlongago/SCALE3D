@@ -1,6 +1,6 @@
 {
-  "product_model_id": "byme-36parts",
-  "display_name": "BYME 36 Parts",
+  "product_model_id": "modela-36parts",
+  "display_name": "ModelA 36 Parts",
   "num_parts": 36,
   "part_names": {
     "0": "part_00",
@@ -42,9 +42,9 @@
   },
   "expected_parts": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35],
   "length_unit": "coordinate_unit",
-  "report_template_id": "default_byme_36",
-  "pointcept_model_config": "Pointcept/exp/byme/semseg-pt-v3m1-0-base-36parts/config.py",
-  "pointcept_weight_path": "Pointcept/exp/byme/semseg-pt-v3m1-0-base-36parts/model/model_last.pth",
+  "report_template_id": "default_modela_36",
+  "pointcept_model_config": "Pointcept/exp/modela_aug_fulltrain_epoch100/config.py",
+  "pointcept_weight_path": "Pointcept/exp/modela_aug_fulltrain_epoch100/model/model_best.pth",
   "thresholds": {
     "min_part_points": 32,
     "confidence_warning_threshold": 0.5,

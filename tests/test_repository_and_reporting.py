@@ -16,14 +16,14 @@ from shared.schemas import (
 
 def test_repository_create_and_get(tmp_path: Path):
     repo = FileJobRepository(tmp_path)
-    record = repo.create_job("byme-36parts", InputType.POINT_CLOUD, ["a.ply"], {})
+    record = repo.create_job("modela-36parts", InputType.POINT_CLOUD, ["a.ply"], {})
     loaded = repo.get(record.job_id)
     assert loaded.job_id == record.job_id
     assert loaded.uploads == ["a.ply"]
 
 
 def test_render_report_bundle(tmp_path: Path):
-    product_model = get_product_model("byme-36parts")
+    product_model = get_product_model("modela-36parts")
     summary = SegmentationSummary(
         is_complete=False,
         detected_parts=1,
