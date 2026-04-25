@@ -29,7 +29,7 @@ def test_render_report_bundle(tmp_path: Path):
         detected_parts=1,
         expected_parts=36,
         missing_part_ids=[1],
-        notes=["Missing expected parts: 1"],
+        notes=["缺失预期部件：1"],
     )
     inspection_summary = build_inspection_summary(product_model, ["warn"])
     result = JobResultPayload(
@@ -47,7 +47,7 @@ def test_render_report_bundle(tmp_path: Path):
                 part_id=0,
                 part_name="part_00",
                 length=1.23,
-                unit="coordinate_unit",
+                unit="cm",
                 source_skeleton_ply="x.ply",
                 status="ok",
             )

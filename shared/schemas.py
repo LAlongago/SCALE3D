@@ -21,6 +21,8 @@ class ProductModelDefinition(BaseModel):
     part_names: dict[str, str]
     expected_parts: list[int]
     length_unit: str
+    reference_part_real_length: float | None = None
+    reference_length_unit: str | None = None
     report_template_id: str
     pointcept_model_config: str
     pointcept_weight_path: str
@@ -56,6 +58,9 @@ class LengthPartResult(BaseModel):
     part_name: str
     length: float | None = None
     unit: str
+    raw_length: float | None = None
+    scale_factor: float | None = None
+    reference_part_id: int | None = None
     source_skeleton_ply: str | None = None
     status: str
 

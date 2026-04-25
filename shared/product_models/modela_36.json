@@ -41,7 +41,9 @@
     "35": "part_35"
   },
   "expected_parts": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35],
-  "length_unit": "coordinate_unit",
+  "length_unit": "cm",
+  "reference_part_real_length": 66.4,
+  "reference_length_unit": "cm",
   "report_template_id": "default_modela_36",
   "pointcept_model_config": "Pointcept/exp/modela_aug_fulltrain_epoch100/config.py",
   "pointcept_weight_path": "Pointcept/exp/modela_aug_fulltrain_epoch100/model/model_best.pth",

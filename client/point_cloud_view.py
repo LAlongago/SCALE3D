@@ -157,7 +157,7 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
             if length is None:
                 self.on_part_selected(part_id, part_name)
             else:
-                self.on_part_selected(part_id, f"{part_name} | 长度={length:.4f}")
+                self.on_part_selected(part_id, f"{part_name} | 长度={length:.2f} cm")
 
     def _refresh_image_pixmap(self) -> None:
         if self._image_pixmap is None or self._image_pixmap.isNull():

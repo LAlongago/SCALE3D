@@ -393,7 +393,7 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
             self.parts_table.setItem(row_idx, 2, QTableWidgetItem(confidence_text))
             length_text = "-"
             if length_entry is not None and length_entry["length"] is not None:
-                length_text = f"{length_entry['length']:.4f}"
+                length_text = f"{length_entry['length']:.2f} {length_entry.get('unit', '')}".strip()
             self.parts_table.setItem(row_idx, 3, QTableWidgetItem(length_text))
 
         self.point_cloud_view.set_lookup(part_names, length_map)

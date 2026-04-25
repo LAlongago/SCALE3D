@@ -127,10 +127,10 @@ def _build_segmentation_summary(product_model, segmentation_rows: list[Segmentat
     ]
     notes = []
     if missing:
-        notes.append(f"Missing expected parts: {', '.join(str(item) for item in missing)}")
+        notes.append(f"缺失预期部件：{', '.join(str(item) for item in missing)}")
     if low_confidence:
         notes.append(
-            "Low-confidence parts: " + ", ".join(str(item) for item in low_confidence)
+            "低置信度部件：" + ", ".join(str(item) for item in low_confidence)
         )
     return SegmentationSummary(
         is_complete=not missing,
@@ -142,21 +142,62 @@ def _build_segmentation_summary(product_model, segmentation_rows: list[Segmentat
     )
 
 
+def _raw_curve_length(raw: dict | None) -> float | None:
+    if raw is None:
+        return None
+    value = raw.get("curve_length_sum")
+    if value is None:
+        return None
+    return float(value)
+
+
+def _length_scale(product_model, curve_length_map: dict[int, dict]) -> tuple[float | None, int | None]:
+    reference_length = getattr(product_model, "reference_part_real_length", None)
+    if reference_length is None:
+        return None, None
+    for part_id in sorted(curve_length_map):
+        raw = curve_length_map[part_id]
+        raw_length = _raw_curve_length(raw)
+        if raw.get("status") == "ok" and raw_length is not None and raw_length > 0:
+            return float(reference_length) / raw_length, part_id
+    return None, None
+
+
 def _build_length_rows(product_model, curve_length_map: dict[int, dict]) -> list[LengthPartResult]:
     rows = []
+    scale_factor, reference_part_id = _length_scale(product_model, curve_length_map)
     for part_id in range(product_model.num_parts):
         raw = curve_length_map.get(part_id)
+        raw_length = _raw_curve_length(raw)
+        length = raw_length if getattr(product_model, "reference_part_real_length", None) is None else None
+        if raw_length is not None and scale_factor is not None:
+            length = raw_length * scale_factor
         rows.append(
             LengthPartResult(
                 part_id=part_id,
                 part_name=product_model.part_names[str(part_id)],
-                length=None if raw is None else raw.get("curve_length_sum"),
+                length=length,
                 unit=product_model.length_unit,
+                raw_length=raw_length,
+                scale_factor=scale_factor,
+                reference_part_id=reference_part_id,
                 source_skeleton_ply=None if raw is None else raw.get("source_skeleton_ply"),
                 status="ok" if raw and raw.get("status") == "ok" else "missing_or_failed",
             )
         )
     return rows
+
+
+def _length_calibration_payload(length_rows: list[LengthPartResult]) -> dict:
+    reference_entry = next((item for item in length_rows if item.reference_part_id is not None), None)
+    return {
+        "reference_part_id": None if reference_entry is None else reference_entry.reference_part_id,
+        "reference_real_length": None if reference_entry is None else reference_entry.length,
+        "unit": None if reference_entry is None else reference_entry.unit,
+        "scale_factor": None if reference_entry is None else reference_entry.scale_factor,
+        "raw_reference_length": None if reference_entry is None else reference_entry.raw_length,
+        "rule": "以计算成功且编号最小的部件作为参考部件，并将该部件真实长度设为 66.4 cm。",
+    }
 
 
 def _run_pointcloud_validation_stage(pointcloud_path: Path) -> dict:
@@ -367,6 +408,7 @@ def _stage_report_generation(job_id: str) -> None:
         ),
         raw_outputs={
             "pointcloud_validation": pointcloud_validation,
+            "length_calibration": _length_calibration_payload(length_rows),
         },
     )
     reports_dir = workspace_dir / "reports"
@@ -664,6 +706,7 @@ def run_job_pipeline(job_id: str) -> None:
             ),
             raw_outputs={
                 "pointcloud_validation": pointcloud_validation,
+                "length_calibration": _length_calibration_payload(length_rows),
             },
         )
         reports_dir = workspace_dir / "reports"
