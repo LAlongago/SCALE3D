@@ -20,6 +20,8 @@ class Settings:
     server_url: str
     colmap_command: str | None
     dgs_command: str | None
+    dgs_python: Path
+    dgs_batch_args: str
     enable_3dgs_denoise: bool
     denoise_3dgs_python: Path
     denoise_3dgs_args: str
@@ -54,6 +56,8 @@ def get_settings() -> Settings:
         server_url=os.environ.get("PIS_SERVER_URL", "http://127.0.0.1:8000"),
         colmap_command=os.environ.get("PIS_COLMAP_COMMAND"),
         dgs_command=os.environ.get("PIS_3DGS_COMMAND"),
+        dgs_python=Path(os.environ.get("PIS_3DGS_PYTHON", sys.executable)).resolve(),
+        dgs_batch_args=os.environ.get("PIS_3DGS_BATCH_ARGS", ""),
         enable_3dgs_denoise=os.environ.get("PIS_ENABLE_3DGS_DENOISE", "1") == "1",
         denoise_3dgs_python=Path(
             os.environ.get("PIS_3DGS_DENOISE_PYTHON", sys.executable)
