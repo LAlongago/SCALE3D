@@ -8,7 +8,7 @@ from shared.settings import get_settings
 def create_celery() -> Celery:
     settings = get_settings()
     app = Celery(
-        "product_inspection_system",
+        "scale3d",
         broker=settings.celery_broker_url,
         backend=settings.celery_result_backend,
     )

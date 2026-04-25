@@ -19,7 +19,7 @@ from shared.schemas import CreateJobResponse, JobStatusResponse
 from shared.settings import get_settings
 from shared.validators import validate_image_paths, validate_pointcloud_path
 
-app = FastAPI(title="UT Product Inspection System")
+app = FastAPI(title="SCALE3D")
 logger = logging.getLogger("scale3d.server")
 
 

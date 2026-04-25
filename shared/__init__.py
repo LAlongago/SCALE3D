@@ -1,1 +1,1 @@
-"""Shared models and helpers for the product inspection system."""
+"""Shared models and helpers for SCALE3D."""

@@ -1,1 +1,1 @@
-"""Background workers and adapters for the product inspection system."""
+"""Background workers and adapters for SCALE3D."""

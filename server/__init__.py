@@ -1,1 +1,1 @@
-"""FastAPI server package for the product inspection system."""
+"""FastAPI server package for SCALE3D."""

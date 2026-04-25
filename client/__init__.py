@@ -1,1 +1,1 @@
-"""Desktop client package for the product inspection system."""
+"""Desktop client package for SCALE3D."""
