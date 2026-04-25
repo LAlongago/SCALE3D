@@ -263,6 +263,7 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
     def _on_job_status_loaded(self, task_key: str, payload: dict) -> None:
         state = self.job_states[task_key]
         state.status_in_flight = False
+        previous_signature = (state.status, state.stage, state.progress, state.current_message)
         state.status = payload["status"]
         state.stage = payload["current_stage"]
         state.progress = payload["current_progress"]
@@ -272,7 +273,14 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
             state.transfer.status_text = "等待中" if state.status == "queued" else "服务器处理中"
         self.window.upsert_job(state)
 
-        if self.selected_task_key == task_key:
+        current_signature = (state.status, state.stage, state.progress, state.current_message)
+        should_log_progress = (
+            self.selected_task_key == task_key
+            and current_signature != previous_signature
+            and current_signature != state.last_log_signature
+        )
+        if should_log_progress:
+            state.last_log_signature = current_signature
             self.window.append_log(
                 f"任务 {state.job_id}: 状态={state.status} 阶段={state.stage} 进度={state.progress}% 说明={state.current_message}"
             )

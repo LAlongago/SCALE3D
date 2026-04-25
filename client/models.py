@@ -54,6 +54,7 @@ class JobViewState:
     result: dict | None = None
     result_loading: bool = False
     status_in_flight: bool = False
+    last_log_signature: tuple[str, str, int, str] | None = None
     submitted_files: list[str] = field(default_factory=list)
     transfer: TransferState = field(default_factory=TransferState)
 

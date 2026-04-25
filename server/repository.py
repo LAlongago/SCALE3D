@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import shutil
-import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
@@ -11,6 +10,12 @@ from shared.enums import ArtifactKind, InputType, JobStage, JobStatus
 from shared.paths import build_project_paths
 from shared.schemas import JobArtifact, JobRecord, JobResultPayload, StageState
 from shared.settings import get_settings
+
+
+JOB_ID_PREFIXES = {
+    InputType.IMAGE_SET: "Images",
+    InputType.POINT_CLOUD: "Pointcloud",
+}
 
 
 class FileJobRepository:
@@ -74,7 +79,7 @@ class FileJobRepository:
         uploads: Iterable[str],
         client_meta: dict,
     ) -> JobRecord:
-        job_id = uuid.uuid4().hex
+        job_id = self._generate_job_id(input_type)
         job_dir = self.job_dir(job_id)
         job_dir.mkdir(parents=True, exist_ok=True)
         record = JobRecord(
@@ -97,6 +102,17 @@ class FileJobRepository:
         )
         self.save(record)
         return record
+
+    def _generate_job_id(self, input_type: InputType) -> str:
+        prefix = JOB_ID_PREFIXES.get(input_type, "Job")
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+        base_id = f"{prefix}_{timestamp}"
+        job_id = base_id
+        suffix = 1
+        while self.job_dir(job_id).exists():
+            suffix += 1
+            job_id = f"{base_id}_{suffix:02d}"
+        return job_id
 
     def save(self, record: JobRecord) -> None:
         record.updated_at = datetime.utcnow()

@@ -238,8 +238,8 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
         table_label = QLabel("部件结果")
         table_label.setContentsMargins(0, 10, 0, 5)
         right_layout.addWidget(table_label)
-        self.parts_table = QTableWidget(0, 4)
-        self.parts_table.setHorizontalHeaderLabels(["部件", "点数", "置信度", "长度"])
+        self.parts_table = QTableWidget(0, 2)
+        self.parts_table.setHorizontalHeaderLabels(["部件名称", "部件长度"])
         self.parts_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.parts_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.parts_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
@@ -388,13 +388,10 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
             length_map[part["part_id"]] = None if length_entry is None else length_entry["length"]
             self.parts_table.insertRow(row_idx)
             self.parts_table.setItem(row_idx, 0, QTableWidgetItem(part["part_name"]))
-            self.parts_table.setItem(row_idx, 1, QTableWidgetItem(str(part["point_count"])))
-            confidence_text = "-" if part["confidence"] is None else f"{part['confidence']:.3f}"
-            self.parts_table.setItem(row_idx, 2, QTableWidgetItem(confidence_text))
             length_text = "-"
             if length_entry is not None and length_entry["length"] is not None:
                 length_text = f"{length_entry['length']:.2f} {length_entry.get('unit', '')}".strip()
-            self.parts_table.setItem(row_idx, 3, QTableWidgetItem(length_text))
+            self.parts_table.setItem(row_idx, 1, QTableWidgetItem(length_text))
 
         self.point_cloud_view.set_lookup(part_names, length_map)
         if segmentation_path is not None:
