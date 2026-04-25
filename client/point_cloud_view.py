@@ -68,7 +68,7 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
             self.plotter.enable_point_picking(
                 callback=self._handle_picked_point,
                 show_message=False,
-                use_picker=True,
+                use_picker=False,
                 left_clicking=True,
             )
             self.stack.addWidget(self.plotter.interactor)
@@ -120,8 +120,7 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
         self.plotter.show_grid(color="#4a4a4a")
         self.plotter.add_axes(line_width=2, labels_off=True)
         self.mesh = pv.read(str(path))
-        render_kwargs = self._build_point_cloud_render_kwargs()
-        self.main_cloud_actor = self.plotter.add_mesh(self.mesh, **render_kwargs)
+        self.main_cloud_actor = self.plotter.add_mesh(self.mesh, **self._build_point_cloud_render_kwargs())
         self.skeleton_actors = []
         self._apply_visibility()
         self.plotter.reset_camera()
@@ -168,25 +167,27 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
             self.plotter.render()
 
     def highlight_part(self, part_id: int) -> None:
-        if self.plotter is None or self.mesh is None:
+        if self.plotter is None or self.mesh is None or pv is None or np is None:
             return
         label_name = self._find_label_array_name()
         if label_name is None:
             return
 
-        mask = self.mesh.point_data[label_name] == part_id
+        labels = np.asarray(self.mesh.point_data[label_name])
+        mask = labels == part_id
         if self.highlight_actor is not None:
             self.plotter.remove_actor(self.highlight_actor, render=False)
             self.highlight_actor = None
 
         if mask.any():
-            highlighted = self.mesh.extract_points(mask, adjacent_cells=False)
+            highlighted = pv.PolyData(np.asarray(self.mesh.points)[mask])
             self.highlight_actor = self.plotter.add_mesh(
                 highlighted,
                 color="#00e5ff",
                 point_size=max(self.point_size + 4, 6),
                 render_points_as_spheres=True,
                 name="highlight",
+                pickable=False,
             )
         self.plotter.render()
 
@@ -195,11 +196,13 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
             return
         if point is None:
             return
-        point_id = int(self.mesh.find_closest_point(point))
+        if hasattr(point, "GetPickPosition"):
+            point = point.GetPickPosition()
         label_name = self._find_label_array_name()
         if label_name is None:
             return
 
+        point_id = int(self.mesh.find_closest_point(point))
         label_array = self.mesh.point_data[label_name]
         part_id = int(label_array[point_id])
         self.highlight_part(part_id)
@@ -256,22 +259,11 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
     def _find_rgb_array_name(self) -> str | None:
         if self.mesh is None:
             return None
-
         point_data = self.mesh.point_data
-        preferred_names = (
-            "rgb",
-            "rgba",
-            "RGB",
-            "RGBA",
-            "colors",
-            "Colors",
-            "colour",
-            "diffuse_colors",
-        )
+        preferred_names = ("rgb", "rgba", "RGB", "RGBA", "colors", "Colors", "colour", "diffuse_colors")
         for name in preferred_names:
             if name in point_data and self._is_rgb_array(point_data[name]):
                 return name
-
         for name in point_data.keys():
             normalized = name.lower()
             if ("rgb" in normalized or "color" in normalized or "colour" in normalized) and self._is_rgb_array(point_data[name]):
@@ -282,9 +274,8 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
         if self.mesh is None:
             return None
         point_data = self.mesh.point_data
-        preferred_names = ("pred_label", "label", "segment", "segmentation")
         lookup = {name.lower(): name for name in point_data.keys()}
-        for name in preferred_names:
+        for name in ("pred_label", "label", "segment", "segmentation"):
             actual = lookup.get(name)
             if actual is not None:
                 return actual
@@ -302,10 +293,7 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
             return None
         point_data = self.mesh.point_data
         channel_map = {name.lower(): point_data[name] for name in point_data.keys()}
-        red = channel_map["red"]
-        green = channel_map["green"]
-        blue = channel_map["blue"]
-        return np.column_stack((red, green, blue))
+        return np.column_stack((channel_map["red"], channel_map["green"], channel_map["blue"]))
 
     def _build_label_rgb(self, labels):
         if np is None:
@@ -346,6 +334,9 @@ class PointCloudView(QWidget):  # pragma: no cover - UI widgets are not unit-tes
         if self.plotter is None:
             return
         self.plotter.clear()
+        self.main_cloud_actor = None
+        self.highlight_actor = None
+        self.skeleton_actors = []
         self.plotter.show_grid(color="#4a4a4a")
         self.plotter.add_axes(line_width=2, labels_off=True)
         self.plotter.add_text("暂无点云数据", font_size=11, color="#888888")

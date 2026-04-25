@@ -7,6 +7,26 @@ from client.models import JobViewState
 from client.point_cloud_view import PointCloudView
 from shared.enums import InputType
 
+STATUS_TEXT = {
+    "uploaded": "已上传",
+    "uploading": "上传中",
+    "queued": "排队中",
+    "running": "处理中",
+    "succeeded": "已完成",
+    "failed": "失败",
+    "cancelled": "已取消",
+}
+
+STAGE_TEXT = {
+    "upload": "上传",
+    "image_reconstruction": "图像重建",
+    "pointcloud_validation": "点云校验",
+    "part_segmentation": "部件分割",
+    "segmentation_report": "分割统计",
+    "skeletonization_and_length": "骨架与长度计算",
+    "report_generation": "报告生成",
+}
+
 try:  # pragma: no cover - UI widgets are not unit-tested
     from PySide6.QtCore import Qt, Signal
     from PySide6.QtGui import QAction, QFont
@@ -386,8 +406,8 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
 
         job_ref = state.job_id if state.job_id else state.task_key
         self.job_label.setText(f"当前任务: {job_ref}")
-        self.server_status_label.setText(f"状态: {state.status}")
-        self.server_stage_label.setText(f"阶段: {state.stage}")
+        self.server_status_label.setText(f"状态: {self._status_text(state.status)}")
+        self.server_stage_label.setText(f"阶段: {self._stage_text(state.stage)}")
         self.server_message_label.setText(f"说明: {state.current_message or '-'}")
         self.server_progress_bar.setValue(state.progress)
 
@@ -502,6 +522,14 @@ class MainWindow(QMainWindow):  # pragma: no cover - UI widgets are not unit-tes
     def _format_job_item_text(self, state: JobViewState) -> str:
         job_ref = state.job_id or state.task_key
         return f"{job_ref}\n创建时间: {state.created_at.strftime('%Y-%m-%d %H:%M:%S')}"
+
+    @staticmethod
+    def _status_text(status: str) -> str:
+        return STATUS_TEXT.get(status, status)
+
+    @staticmethod
+    def _stage_text(stage: str) -> str:
+        return STAGE_TEXT.get(stage, stage)
 
     @staticmethod
     def _format_speed(speed_bps: float) -> str:

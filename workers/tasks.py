@@ -62,7 +62,7 @@ class LocalQueueDispatcher:
     def submit_pipeline(self, job_id: str) -> None:
         repo = FileJobRepository()
         record = repo.get(job_id)
-        repo.update_stage(job_id, JobStatus.QUEUED, JobStage.UPLOAD, 5, "Job queued for execution.")
+        repo.update_stage(job_id, JobStatus.QUEUED, JobStage.UPLOAD, 5, "任务已进入处理队列。")
         logger.info("Job %s accepted into staged local pipeline.", job_id)
         if record.input_type == InputType.IMAGE_SET:
             self._submit_step(job_id, IMAGE_RECONSTRUCTION_STEP)
@@ -459,6 +459,7 @@ def _stage_report_generation(job_id: str) -> None:
     result.reports.json_path = "artifacts/inspection_report.json"
     repo.set_result(job_id, result)
     repo.mark_succeeded(job_id)
+    repo.export_job_outputs(job_id)
     if get_settings().cleanup_workspace_on_success:
         repo.cleanup_job_temp_resources(job_id)
         logger.info("Job %s temporary resources cleaned after success.", job_id)
@@ -469,6 +470,7 @@ def _stage_report_generation(job_id: str) -> None:
 def _mark_job_failed(job_id: str, stage: JobStage, exc: BaseException) -> None:
     repo = FileJobRepository()
     repo.mark_failed(job_id, stage, str(exc))
+    repo.export_job_outputs(job_id)
     if get_settings().cleanup_workspace_on_failure:
         repo.cleanup_job_temp_resources(job_id)
         logger.info("Job %s temporary resources cleaned after failure.", job_id)
@@ -479,42 +481,42 @@ IMAGE_RECONSTRUCTION_STEP = PipelineStep(
     stage=JobStage.IMAGE_RECONSTRUCTION,
     progress=15,
     queue_name="reconstruction_gpu",
-    message="Running COLMAP and 3DGS reconstruction.",
+    message="正在执行 COLMAP 与 3DGS 重建。",
     handler=_stage_image_reconstruction,
 )
 POINTCLOUD_VALIDATION_STEP = PipelineStep(
     stage=JobStage.POINTCLOUD_VALIDATION,
     progress=30,
     queue_name="geometry_cpu",
-    message="Validating uploaded point cloud and extracting metadata.",
+    message="正在校验点云并提取元数据。",
     handler=_stage_pointcloud_validation,
 )
 PART_SEGMENTATION_STEP = PipelineStep(
     stage=JobStage.PART_SEGMENTATION,
     progress=50,
     queue_name="segmentation_gpu",
-    message="Preparing Pointcept inference sample and running segmentation.",
+    message="正在准备 Pointcept 推理样本并执行部件分割。",
     handler=_stage_part_segmentation,
 )
 SEGMENTATION_REPORT_STEP = PipelineStep(
     stage=JobStage.SEGMENTATION_REPORT,
     progress=65,
     queue_name="geometry_cpu",
-    message="Aggregating part completeness and confidence report.",
+    message="正在汇总部件完整性与置信度结果。",
     handler=_stage_segmentation_report,
 )
 SKELETONIZATION_AND_LENGTH_STEP = PipelineStep(
     stage=JobStage.SKELETONIZATION_AND_LENGTH,
     progress=80,
     queue_name="geometry_cpu",
-    message="Running pc-skeletor skeletonization and curve length analysis.",
+    message="正在执行骨架化与曲线长度计算。",
     handler=_stage_skeletonization_and_length,
 )
 REPORT_GENERATION_STEP = PipelineStep(
     stage=JobStage.REPORT_GENERATION,
     progress=95,
     queue_name="geometry_cpu",
-    message="Rendering inspection report bundle.",
+    message="正在生成检测报告。",
     handler=_stage_report_generation,
 )
 
@@ -531,7 +533,7 @@ def run_job_pipeline(job_id: str) -> None:
 
     try:
         logger.info("Job %s accepted into pipeline.", job_id)
-        repo.update_stage(job_id, JobStatus.QUEUED, JobStage.UPLOAD, 5, "Job queued for execution.")
+        repo.update_stage(job_id, JobStatus.QUEUED, JobStage.UPLOAD, 5, "任务已进入处理队列。")
         logger.info("Job %s queued.", job_id)
 
         if record.input_type == InputType.IMAGE_SET:
@@ -541,7 +543,7 @@ def run_job_pipeline(job_id: str) -> None:
                 JobStatus.RUNNING,
                 JobStage.IMAGE_RECONSTRUCTION,
                 15,
-                "Running COLMAP and 3DGS reconstruction.",
+                "正在执行 COLMAP 与 3DGS 重建。",
                 queue_name="reconstruction_gpu",
             )
             reconstruction_output = workspace_dir / "reconstruction"
@@ -574,7 +576,7 @@ def run_job_pipeline(job_id: str) -> None:
             JobStatus.RUNNING,
             JobStage.POINTCLOUD_VALIDATION,
             30,
-            "Validating uploaded point cloud and extracting metadata.",
+            "正在校验点云并提取元数据。",
             queue_name="geometry_cpu",
         )
         logger.info("Job %s validating point cloud.", job_id)
@@ -595,7 +597,7 @@ def run_job_pipeline(job_id: str) -> None:
             JobStatus.RUNNING,
             JobStage.PART_SEGMENTATION,
             50,
-            "Preparing Pointcept inference sample and running segmentation.",
+            "正在准备 Pointcept 推理样本并执行部件分割。",
             queue_name="segmentation_gpu",
         )
         logger.info("Job %s running Pointcept segmentation.", job_id)
@@ -639,7 +641,7 @@ def run_job_pipeline(job_id: str) -> None:
             JobStatus.RUNNING,
             JobStage.SEGMENTATION_REPORT,
             65,
-            "Aggregating part completeness and confidence report.",
+            "正在汇总部件完整性与置信度结果。",
             queue_name="geometry_cpu",
         )
         logger.info("Job %s building segmentation report.", job_id)
@@ -668,7 +670,7 @@ def run_job_pipeline(job_id: str) -> None:
             JobStatus.RUNNING,
             JobStage.SKELETONIZATION_AND_LENGTH,
             80,
-            "Running pc-skeletor skeletonization and curve length analysis.",
+            "正在执行骨架化与曲线长度计算。",
             queue_name="geometry_cpu",
         )
         logger.info("Job %s running skeletonization and curve length analysis.", job_id)
@@ -711,7 +713,7 @@ def run_job_pipeline(job_id: str) -> None:
             JobStatus.RUNNING,
             JobStage.REPORT_GENERATION,
             95,
-            "Rendering inspection report bundle.",
+            "正在生成检测报告。",
             queue_name="geometry_cpu",
         )
         logger.info("Job %s generating inspection report.", job_id)
@@ -758,12 +760,14 @@ def run_job_pipeline(job_id: str) -> None:
         result.reports.json_path = "artifacts/inspection_report.json"
         repo.set_result(job_id, result)
         repo.mark_succeeded(job_id)
+        repo.export_job_outputs(job_id)
         if settings.cleanup_workspace_on_success:
             repo.cleanup_job_temp_resources(job_id)
             logger.info("Job %s temporary resources cleaned after success.", job_id)
         logger.info("Job %s completed successfully.", job_id)
     except Exception as exc:
         repo.mark_failed(job_id, repo.get(job_id).current_stage, str(exc))
+        repo.export_job_outputs(job_id)
         if settings.cleanup_workspace_on_failure:
             repo.cleanup_job_temp_resources(job_id)
             logger.info("Job %s temporary resources cleaned after failure.", job_id)

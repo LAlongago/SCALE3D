@@ -28,12 +28,23 @@ JOB_ID_PREFIXES = {
 }
 
 
+STATUS_TEXT = {
+    "uploaded": "已上传",
+    "uploading": "上传中",
+    "queued": "排队中",
+    "running": "处理中",
+    "succeeded": "已完成",
+    "failed": "失败",
+    "cancelled": "已取消",
+}
+
+
 class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
     def __init__(self, window: MainWindow) -> None:
         self.window = window
         self.api = ApiClient()
         self.thread_pool = QThreadPool.globalInstance()
-        self.cache_dir = Path(tempfile.gettempdir()) / "pis-client-cache"
+        self.cache_dir = Path(tempfile.gettempdir()) / "scale3d-client-cache"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.selected_files: list[Path] = []
         self.job_states: dict[str, JobViewState] = {}
@@ -52,7 +63,7 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         self.window.part_row_selected.connect(self.handle_part_row_selected)
         self.window.point_cloud_part_picked.connect(self.handle_point_cloud_part_picked)
 
-        self.window.append_log(f"客户端已连接到服务器: {self.api.base_url}")
+        self.window.append_log("客户端已连接到服务器", status=self.api.base_url)
         self.load_product_models()
 
     def cleanup(self) -> None:
@@ -73,9 +84,8 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
 
     def handle_browse_directory(self) -> None:
         selected_dir = self.window.prompt_for_directory()
-        if selected_dir is None:
-            return
-        self.window.set_browser_root(selected_dir)
+        if selected_dir is not None:
+            self.window.set_browser_root(selected_dir)
 
     def handle_file_selection(self, selected_paths: object) -> None:
         if not isinstance(selected_paths, list):
@@ -92,7 +102,6 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         if not self.selected_files:
             self.window.show_warning("缺少输入", "请先在文件选择窗口中选择图像或点云文件。")
             return
-
         product_model_id = self.window.selected_product_model_id()
         if not product_model_id:
             self.window.show_warning("缺少型号", "请先选择产品型号。")
@@ -104,7 +113,7 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
             if image_files is None:
                 return
             if len(image_files) > 1 and not self.window.confirm_image_batch(len(image_files)):
-                self.window.append_log("用户取消了图像批次提交。")
+                self.window.append_log("用户取消图像批次提交", status="已取消")
                 return
             self._submit_single_job(product_model_id, input_type, image_files)
             return
@@ -119,7 +128,7 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         invalid = [path for path in self.selected_files if path.suffix.lower() not in IMAGE_SUFFIXES]
         if invalid:
             names = "，".join(path.name for path in invalid[:3])
-            self.window.show_error("文件类型错误", f"图像组任务只能选择图片文件，当前包含: {names}")
+            self.window.show_error("文件类型错误", f"图像组任务只能选择图片文件，当前包含：{names}")
             return None
         try:
             validate_image_paths(self.selected_files)
@@ -132,9 +141,8 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         invalid = [path for path in self.selected_files if path.suffix.lower() not in POINTCLOUD_SUFFIXES]
         if invalid:
             names = "，".join(path.name for path in invalid[:3])
-            self.window.show_error("文件类型错误", f"点云任务只能选择 PLY 文件，当前包含: {names}")
+            self.window.show_error("文件类型错误", f"点云任务只能选择 PLY 文件，当前包含：{names}")
             return None
-
         valid_paths: list[Path] = []
         for pointcloud_path in self.selected_files:
             try:
@@ -189,7 +197,6 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         state = self.job_states.get(task_key)
         if state is None:
             return
-
         state.transfer = TransferState.from_progress(progress, active=progress.progress_percent < 100)
         if progress.phase == "upload" and state.job_id is None:
             state.status = "uploading"
@@ -229,7 +236,7 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         if state.job_id != local_task_id:
             self.window.replace_log_task_id(local_task_id, state.job_id)
         self._update_queue_count()
-        self.window.append_log("任务已创建", task_id=state.job_id, status=state.status)
+        self.window.append_log("任务已创建", task_id=state.job_id, status=self._status_text(state.status))
         if not self.poll_timer.isActive():
             self.poll_timer.start()
         self._refresh_single_job(task_key)
@@ -243,7 +250,6 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         if not active_states and self.poll_timer.isActive():
             self.poll_timer.stop()
             return
-
         for state in active_states:
             self._refresh_single_job(state.task_key)
 
@@ -291,22 +297,22 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         if should_log_progress:
             state.last_log_signature = current_signature
             self.window.append_log(
-                f"{state.stage} | {state.progress}% | {state.current_message}",
+                f"{self.window._stage_text(state.stage)} | {state.progress}% | {state.current_message}",
                 task_id=state.job_id,
-                status=state.status,
+                status=self._status_text(state.status),
             )
 
         if state.status == "succeeded" and state.result is None and not state.result_loading:
             self._load_result(task_key)
         elif state.status == "failed" and self.selected_task_key == task_key:
-            self.window.show_error("任务失败", state.error or "Unknown error")
+            self.window.show_error("任务失败", state.error or "未知错误")
 
     def _load_result(self, task_key: str) -> None:
         state = self.job_states[task_key]
         if state.job_id is None:
             return
         state.result_loading = True
-        self.window.append_log("开始加载任务结果", task_id=state.job_id, status=state.status)
+        self.window.append_log("开始加载任务结果", task_id=state.job_id, status=self._status_text(state.status))
 
         def _run(progress_emit):
             result = self.api.get_result(state.job_id)
@@ -365,7 +371,7 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         state.transfer.progress_percent = 100
         self.window.upsert_job(state)
         self._update_queue_count()
-        self.window.append_log("结果加载完成", task_id=state.job_id or task_key, status=state.status)
+        self.window.append_log("结果加载完成", task_id=state.job_id or task_key, status=self._status_text(state.status))
         if self.selected_task_key == task_key:
             self.window.render_result(
                 state,
@@ -405,11 +411,9 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
         if not state.job_id:
             self.window.show_warning("任务未就绪", "当前任务还没有服务端任务编号，暂时无法导出。")
             return
-
         target_path = self.window.prompt_save_path(artifact_name)
         if target_path is None:
             return
-
         start_background_task(
             self.thread_pool,
             lambda progress_emit, job_id=state.job_id: self.api.download_artifact(
@@ -452,3 +456,7 @@ class ClientTaskController:  # pragma: no cover - UI widgets are not unit-tested
             suffix += 1
             task_id = f"{base_id}_{suffix:02d}"
         return task_id
+
+    @staticmethod
+    def _status_text(status: str) -> str:
+        return STATUS_TEXT.get(status, status)
