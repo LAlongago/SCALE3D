@@ -19,19 +19,51 @@ class ReconstructionConfigurationError(RuntimeError):
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
 
+def _run_streaming_command(
+    command,
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    shell: bool = False,
+    log_prefix: str,
+) -> tuple[int, str]:
+    merged_env = os.environ.copy()
+    if env:
+        merged_env.update(env)
+    process = subprocess.Popen(
+        command,
+        cwd=None if cwd is None else str(cwd),
+        env=merged_env,
+        shell=shell,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        universal_newlines=True,
+        bufsize=1,
+    )
+    output_lines: list[str] = []
+    assert process.stdout is not None
+    for line in process.stdout:
+        clean = line.rstrip()
+        output_lines.append(line)
+        if clean:
+            logger.info("%s%s", log_prefix, clean)
+    return_code = process.wait()
+    return return_code, "".join(output_lines)
+
+
 def _run_template(command_template: str, image_dir: Path, output_dir: Path) -> None:
     command = command_template.format(image_dir=str(image_dir), output_dir=str(output_dir))
-    completed = subprocess.run(
+    logger.info("Executing external reconstruction command: %s", command)
+    return_code, output = _run_streaming_command(
         command,
         shell=True,
-        capture_output=True,
-        text=True,
-        check=False,
+        log_prefix="[reconstruction] ",
     )
-    if completed.returncode != 0:
+    if return_code != 0:
         raise RuntimeError(
-            f"External reconstruction command failed ({completed.returncode}): {command}\n"
-            f"stdout:\n{completed.stdout}\n\nstderr:\n{completed.stderr}"
+            f"External reconstruction command failed ({return_code}): {command}\n"
+            f"stdout:\n{output}"
         )
 
 
@@ -56,21 +88,15 @@ def _run_3dgs_denoise(pointcloud_path: Path, output_dir: Path) -> Path:
         command.extend(shlex.split(settings.denoise_3dgs_args))
 
     logger.info("Executing 3DGS point cloud denoise command: %s", " ".join(command))
-    completed = subprocess.run(
+    return_code, output = _run_streaming_command(
         command,
         cwd=str(denoise_script.parent),
-        capture_output=True,
-        text=True,
-        check=False,
+        log_prefix="[3dgs-denoise] ",
     )
-    if completed.stdout:
-        logger.info("3DGS denoise stdout:\n%s", completed.stdout.rstrip())
-    if completed.stderr:
-        logger.info("3DGS denoise stderr:\n%s", completed.stderr.rstrip())
-    if completed.returncode != 0:
+    if return_code != 0:
         raise RuntimeError(
-            f"3DGS point cloud denoise failed ({completed.returncode}): {' '.join(command)}\n"
-            f"stdout:\n{completed.stdout}\n\nstderr:\n{completed.stderr}"
+            f"3DGS point cloud denoise failed ({return_code}): {' '.join(command)}\n"
+            f"stdout:\n{output}"
         )
     if not denoised_path.exists():
         raise FileNotFoundError(f"3DGS denoise finished but output was not found: {denoised_path}")
@@ -127,21 +153,15 @@ def _run_default_batch_reconstruction(image_dir: Path, output_dir: Path) -> Path
         command.extend(shlex.split(settings.dgs_batch_args))
 
     logger.info("Executing default 3DGS batch reconstruction command: %s", " ".join(command))
-    completed = subprocess.run(
+    return_code, output = _run_streaming_command(
         command,
         cwd=str(batch_script.parent),
-        capture_output=True,
-        text=True,
-        check=False,
+        log_prefix="[3dgs-batch] ",
     )
-    if completed.stdout:
-        logger.info("3DGS batch reconstruction stdout:\n%s", completed.stdout.rstrip())
-    if completed.stderr:
-        logger.info("3DGS batch reconstruction stderr:\n%s", completed.stderr.rstrip())
-    if completed.returncode != 0:
+    if return_code != 0:
         raise RuntimeError(
-            f"3DGS batch reconstruction failed ({completed.returncode}): {' '.join(command)}\n"
-            f"stdout:\n{completed.stdout}\n\nstderr:\n{completed.stderr}"
+            f"3DGS batch reconstruction failed ({return_code}): {' '.join(command)}\n"
+            f"stdout:\n{output}"
         )
 
     model_scene = model_output_root / scene_name

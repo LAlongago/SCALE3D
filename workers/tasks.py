@@ -218,18 +218,6 @@ def _build_length_rows(product_model, curve_length_map: dict[int, dict]) -> list
     return rows
 
 
-def _length_calibration_payload(length_rows: list[LengthPartResult]) -> dict:
-    reference_entry = next((item for item in length_rows if item.reference_part_id is not None), None)
-    return {
-        "reference_part_id": None if reference_entry is None else reference_entry.reference_part_id,
-        "reference_real_length": None if reference_entry is None else reference_entry.length,
-        "unit": None if reference_entry is None else reference_entry.unit,
-        "scale_factor": None if reference_entry is None else reference_entry.scale_factor,
-        "raw_reference_length": None if reference_entry is None else reference_entry.raw_length,
-        "rule": "以计算成功且编号最小的部件作为参考部件，并将该部件真实长度设为 66.4 cm。",
-    }
-
-
 def _job_report_metadata(record, completed_at: datetime) -> dict:
     source_paths = record.client_meta.get("source_paths") if isinstance(record.client_meta, dict) else None
     if not source_paths:
@@ -490,7 +478,6 @@ def _stage_report_generation(job_id: str) -> None:
         ),
         raw_outputs={
             "pointcloud_validation": pointcloud_validation,
-            "length_calibration": _length_calibration_payload(length_rows),
             "job_metadata": job_metadata,
         },
     )
@@ -791,7 +778,6 @@ def run_job_pipeline(job_id: str) -> None:
             ),
             raw_outputs={
                 "pointcloud_validation": pointcloud_validation,
-                "length_calibration": _length_calibration_payload(length_rows),
                 "job_metadata": job_metadata,
             },
         )

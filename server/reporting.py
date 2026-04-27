@@ -52,26 +52,15 @@ def render_report_bundle(
     json_path = output_dir / "inspection_report.json"
     pdf_path = output_dir / "inspection_report.pdf"
 
-    reference_entry = next(
-        (item for item in result.lengths if item.reference_part_id is not None),
-        None,
-    )
     payload = {
         "任务信息": job_metadata or {},
         "产品型号ID": product_model.product_model_id,
         "产品型号名称": product_model.display_name,
         "长度单位": result.reports.inspection_summary.length_unit,
-        "长度标定": {
-            "参考部件编号": None if reference_entry is None else reference_entry.reference_part_id,
-            "参考真实长度": product_model.reference_part_real_length,
-            "参考真实长度单位": product_model.reference_length_unit,
-            "比例系数": None if reference_entry is None else reference_entry.scale_factor,
-            "说明": "以计算成功且编号最小的部件作为参考部件进行长度标定。",
-        },
         "分割结果": [item.model_dump() for item in result.segmentation],
-        "长度结果": [item.model_dump() for item in result.lengths],
+        "长度结果": [_report_length_item(item) for item in result.lengths],
         "报告摘要": result.reports.model_dump(),
-        "原始输出": result.raw_outputs,
+        "原始输出": _report_raw_outputs(result.raw_outputs),
     }
     json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False, default=json_serializer), encoding="utf-8")
 
@@ -91,19 +80,6 @@ def render_report_bundle(
         Paragraph(f"产品型号：{product_model.display_name}", styles["Heading2"]),
         Paragraph(
             f"长度单位：{result.reports.inspection_summary.length_unit}",
-            styles["BodyText"],
-        ),
-        Paragraph(
-            "长度标定：以计算成功且编号最小的部件作为参考部件，"
-            f"参考真实长度为 {product_model.reference_part_real_length} "
-            f"{product_model.reference_length_unit or result.reports.inspection_summary.length_unit}。",
-            styles["BodyText"],
-        ),
-        Paragraph(
-            "参考部件编号："
-            + ("-" if reference_entry is None else str(reference_entry.reference_part_id))
-            + "；比例系数："
-            + ("-" if reference_entry is None or reference_entry.scale_factor is None else f"{reference_entry.scale_factor:.6f}"),
             styles["BodyText"],
         ),
         Spacer(1, 12),
@@ -154,6 +130,19 @@ def render_report_bundle(
     story.append(table)
     doc.build(story)
     return pdf_path, json_path
+
+
+def _report_length_item(item) -> dict:
+    payload = item.model_dump()
+    payload.pop("scale_factor", None)
+    payload.pop("reference_part_id", None)
+    return payload
+
+
+def _report_raw_outputs(raw_outputs: dict) -> dict:
+    payload = dict(raw_outputs)
+    payload.pop("length_calibration", None)
+    return payload
 
 
 def _metadata_value(job_metadata: dict | None, key: str) -> str:
