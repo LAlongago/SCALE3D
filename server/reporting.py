@@ -98,7 +98,7 @@ def render_report_bundle(
             story.append(Paragraph(warning, styles["BodyText"]))
         story.append(Spacer(1, 10))
 
-    table_rows = [["部件", "点数", "置信度", "真实长度", "原始长度", "状态"]]
+    table_rows = [["部件", "点数", "置信度", "真实长度", "状态"]]
     lengths_by_part = {item.part_id: item for item in result.lengths}
     for part in result.segmentation:
         length_entry = lengths_by_part.get(part.part_id)
@@ -110,9 +110,6 @@ def render_report_bundle(
                 "-"
                 if length_entry is None or length_entry.length is None
                 else _format_length(length_entry.length, length_entry.unit),
-                "-"
-                if length_entry is None or length_entry.raw_length is None
-                else f"{length_entry.raw_length:.4f}",
                 _status_text(part.status),
             ]
         )
